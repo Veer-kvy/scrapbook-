@@ -24,7 +24,21 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Repository secrets drive the build mode. With both values set the app
+      # talks to Supabase; otherwise it builds in local mode. The anon key is
+      # public by design — row-level security enforces what it can read.
       - run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      - run: |
+          if [ -n "$VITE_SUPABASE_URL" ]; then
+            echo "Built with Supabase backend."
+          else
+            echo "Built in local mode (no Supabase secrets)."
+          fi
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
