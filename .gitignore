@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.legacy-editor/
+.shots/
+.npm-cache/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+!.env.example
