@@ -52,6 +52,16 @@ The app seeds itself with seven demo pages and sample photographs in `public/pho
 
 Routing is hash-based, so the static build works on any host without rewrite rules.
 
+### Deploy to GitHub Pages
+
+This repo includes `.github/workflows/deploy.yml`, which builds `dist/` and deploys it with GitHub Actions.
+
+1. Push to the `main` branch.
+2. Open the repository → **Settings → Pages → Build and deployment** → set **Source** to **GitHub Actions**.
+3. Wait for the workflow to finish. The site is at `https://<user>.github.io/<repo>/`.
+
+The build uses relative asset paths (`base: './'`), so the same output works at a domain root and under a project subpath. Do not use **Deploy from a branch → / (root)** — the repository root is the Vite source, not the build, and the page would stay blank. GitHub Pages on a private repository requires a paid GitHub plan; otherwise make the repository public.
+
 ---
 
 ## Supabase setup (production mode)
