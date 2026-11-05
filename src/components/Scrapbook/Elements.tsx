@@ -143,7 +143,7 @@ export function PhotoView({
   const front = (
     <div className={`polaroid frame-${element.frame}`}>
       <div className="polaroid-photo">
-        {url ? (
+        {element.photoId && url ? (
           <img
             src={url}
             alt={alt}
@@ -153,10 +153,15 @@ export function PhotoView({
               transform: `translate(${element.crop.x}%, ${element.crop.y}%) scale(${element.crop.zoom}) rotate(${element.imageRotate}deg)`,
             }}
           />
-        ) : (
+        ) : element.photoId ? (
           <div className="photo-missing">
             <Icon name="image" size={26} />
             <span>photo unavailable</span>
+          </div>
+        ) : (
+          <div className="photo-slot">
+            <Icon name="image" size={26} />
+            <span>your photo here</span>
           </div>
         )}
       </div>

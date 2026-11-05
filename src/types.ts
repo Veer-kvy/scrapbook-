@@ -60,7 +60,20 @@ export type TemplateId =
   | 'openwhen'
   | 'littlethings'
   | 'final'
-  | 'blank';
+  | 'blank'
+  | 'classic-polaroid'
+  | 'vintage-journal'
+  | 'floral-garden'
+  | 'photo-collage'
+  | 'love-letter'
+  | 'open-when'
+  | 'minimal-memory'
+  | 'kawaii'
+  | 'editorial'
+  | 'timeline'
+  | 'photo-gallery'
+  | 'secret-surprise'
+  | 'custom';
 
 export type BackgroundId =
   | 'cream'
@@ -69,7 +82,62 @@ export type BackgroundId =
   | 'grid'
   | 'sprinkle'
   | 'linen'
-  | 'ombre';
+  | 'ombre'
+  | 'aged'
+  | 'ivory'
+  | 'sweet'
+  | 'midnight';
+
+export type TemplateCategory =
+  | 'romantic'
+  | 'vintage'
+  | 'minimal'
+  | 'floral'
+  | 'polaroid'
+  | 'journal'
+  | 'collage'
+  | 'letter'
+  | 'interactive'
+  | 'surprise';
+
+export type TemplateContentType =
+  | 'photos'
+  | 'captions'
+  | 'dates'
+  | 'text'
+  | 'letters'
+  | 'hidden'
+  | 'buttons'
+  | 'stickers'
+  | 'timeline';
+
+export type PageTint = 'none' | 'warm' | 'pink' | 'sage' | 'sepia' | 'night';
+
+export type PageBorder =
+  | 'none'
+  | 'hairline'
+  | 'thin'
+  | 'double'
+  | 'stitched'
+  | 'deckle'
+  | 'scallop';
+
+export type PageShadow = 'none' | 'soft' | 'deep';
+
+export type PageEntrance = 'none' | 'fade' | 'rise' | 'drift' | 'unfold';
+
+export type PageHover = 'none' | 'lift' | 'tilt' | 'zoom';
+
+/** Look and motion that belongs to a page rather than to its content. */
+export interface PageStyle {
+  accent: string;
+  tint: PageTint;
+  border: PageBorder;
+  shadow: PageShadow;
+  entrance: PageEntrance;
+  hover: PageHover;
+  decor: boolean;
+}
 
 interface ElementBase {
   id: string;
@@ -153,6 +221,26 @@ export interface Page {
   bg: BackgroundId;
   transition?: PageTransitionId;
   elements: ScrapbookElement[];
+  /** Look and motion of this page. Old pages without it render as before. */
+  style?: PageStyle;
+  /** Display name when the page was built from My Templates. */
+  templateName?: string;
+  /** Which saved personal template this page came from. */
+  customTemplateId?: string;
+}
+
+/** A page saved as a reusable, editable template inside one scrapbook. */
+export interface CustomTemplate {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  bg: BackgroundId;
+  transition: PageTransitionId;
+  style: PageStyle;
+  elements: ScrapbookElement[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface Album {
@@ -247,6 +335,7 @@ export interface ScrapbookDoc {
   photos: PhotoMeta[];
   letters: Letter[];
   customAssets: CustomAsset[];
+  customTemplates: CustomTemplate[];
   theme: ThemeSettings;
   settings: ScrapbookSettings;
   updatedAt: number;

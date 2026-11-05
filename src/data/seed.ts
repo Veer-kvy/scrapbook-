@@ -98,6 +98,7 @@ export function createSeedDoc(): ScrapbookDoc {
     theme: DEFAULT_THEME,
     letters: SEED_LETTERS,
     customAssets: [],
+    customTemplates: [],
     albums: [
       { id: 'album-us', name: 'Us' },
       { id: 'album-sky', name: 'Sky things' },

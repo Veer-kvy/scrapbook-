@@ -5,6 +5,8 @@ import { clamp, round } from '../../lib/utils';
 import { ElementView } from './Elements';
 import { Icon } from '../UI/Icon';
 import { Sticker } from '../Stickers/Sticker';
+import { TemplateDecor } from '../../templates/decor';
+import { pageStyle } from '../../templates/registry';
 
 const BG_CLASS: Record<BackgroundId, string> = {
   cream: 'bg-paper-cream',
@@ -14,6 +16,10 @@ const BG_CLASS: Record<BackgroundId, string> = {
   sprinkle: 'bg-paper-sprinkle',
   linen: 'bg-paper-linen',
   ombre: 'bg-paper-ombre',
+  aged: 'bg-paper-aged',
+  ivory: 'bg-paper-ivory',
+  sweet: 'bg-paper-sweet',
+  midnight: 'bg-paper-midnight',
 };
 
 const KIND_LABEL: Record<ScrapbookElement['kind'], string> = {
@@ -85,6 +91,8 @@ export function PageCanvas({
   const canEdit = interactive && editor && !preview && !viewOnly;
   const selected = canEdit ? page.elements.find((el) => el.id === selectedId) : undefined;
   const sorted = [...page.elements].sort((a, b) => a.z - b.z);
+  const look = pageStyle(page);
+  const motion = !canEdit && !viewOnly;
 
   useEffect(() => {
     if (!canEdit || !selected) return;
@@ -238,6 +246,8 @@ export function PageCanvas({
         canEdit ? 'select-none' : ''
       }`}
       style={{ containerType: 'size', ...style }}
+      data-tpl-shadow={look.shadow}
+      data-tpl-template={page.template}
       role="group"
       aria-label={`Page ${pageNumber}: ${page.name}`}
       onPointerDown={
@@ -250,6 +260,8 @@ export function PageCanvas({
       }
     >
       <div className="page-sheet-inner">
+        <TemplateDecor page={page} />
+
         {page.template === 'final' && (
           <div className="pointer-events-none absolute inset-0 z-[2]" aria-hidden="true">
             {FINAL_DECOR.map((petal, index) => (
@@ -270,7 +282,9 @@ export function PageCanvas({
           </div>
         )}
 
-        {sorted.map((element) => (
+        {sorted.map((element, index) => {
+          const animates = motion && look.entrance !== 'none';
+          return (
           <div
             key={element.id}
             data-element-id={element.id}
@@ -280,7 +294,9 @@ export function PageCanvas({
                   ? 'cursor-default'
                   : 'cursor-grab active:cursor-grabbing'
                 : ''
-            } ${viewOnly ? 'pointer-events-none' : ''}`}
+            } ${viewOnly ? 'pointer-events-none' : ''} ${
+              animates ? `tpl-enter tpl-enter-${look.entrance}` : ''
+            }`}
             style={{
               left: `${element.x}%`,
               top: `${element.y}%`,
@@ -290,17 +306,27 @@ export function PageCanvas({
               zIndex: 10 + element.z,
               opacity: element.opacity ?? 1,
               touchAction: canEdit ? 'none' : undefined,
-            }}
+              '--el-rot': `${element.rot}deg`,
+              '--el-opacity': element.opacity ?? 1,
+              '--enter-delay': `${Math.min(index * 70, 560)}ms`,
+            } as CSSProperties}
             onPointerDown={canEdit ? (event) => startDrag(event, element) : undefined}
           >
-            <ElementView element={element} editorMode={canEdit} inactive={viewOnly} />
+            <div
+              className={`h-full w-full ${
+                motion && look.hover !== 'none' ? `tpl-hover tpl-hover-${look.hover}` : ''
+              }`}
+            >
+              <ElementView element={element} editorMode={canEdit} inactive={viewOnly} />
+            </div>
             {canEdit && element.locked && (
               <span className="pointer-events-none absolute -left-1 -top-1 grid h-5 w-5 place-items-center rounded-full bg-[#8f5a68] text-[#fff8ec]">
                 <Icon name="lock" size={11} />
               </span>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {canEdit && selected && (
           <div

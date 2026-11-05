@@ -136,6 +136,19 @@ export const TEMPLATE_LABELS: Record<TemplateId, string> = {
   littlethings: 'Little Things',
   final: 'Final Surprise',
   blank: 'Blank Page',
+  'classic-polaroid': 'Classic Polaroid Memories',
+  'vintage-journal': 'Vintage Love Journal',
+  'floral-garden': 'Floral Garden',
+  'photo-collage': 'Scrapbook Photo Collage',
+  'love-letter': 'Love Letter Page',
+  'open-when': 'Open When Envelopes',
+  'minimal-memory': 'Minimal Memory Page',
+  kawaii: 'Cute Kawaii Scrapbook',
+  editorial: 'Magazine Editorial',
+  timeline: 'Memory Timeline',
+  'photo-gallery': 'Interactive Photo Gallery',
+  'secret-surprise': 'Secret Surprise Page',
+  custom: 'My template',
 };
 
 export const TRANSITION_OPTIONS: { value: PageTransitionId; label: string; hint: string }[] = [
@@ -225,6 +238,19 @@ export const TEMPLATE_BG: Record<TemplateId, BackgroundId> = {
   littlethings: 'sprinkle',
   final: 'ombre',
   blank: 'cream',
+  'classic-polaroid': 'cream',
+  'vintage-journal': 'aged',
+  'floral-garden': 'ivory',
+  'photo-collage': 'linen',
+  'love-letter': 'cream',
+  'open-when': 'blush',
+  'minimal-memory': 'ivory',
+  kawaii: 'sweet',
+  editorial: 'ivory',
+  timeline: 'linen',
+  'photo-gallery': 'midnight',
+  'secret-surprise': 'midnight',
+  custom: 'cream',
 };
 
 export const BACKGROUNDS: { id: BackgroundId; label: string }[] = [
@@ -235,6 +261,10 @@ export const BACKGROUNDS: { id: BackgroundId; label: string }[] = [
   { id: 'sprinkle', label: 'Sprinkles' },
   { id: 'linen', label: 'Linen' },
   { id: 'ombre', label: 'Soft ombre' },
+  { id: 'aged', label: 'Aged paper' },
+  { id: 'ivory', label: 'Ivory' },
+  { id: 'sweet', label: 'Gingham' },
+  { id: 'midnight', label: 'Midnight' },
 ];
 
 export const TEMPLATE_GUIDE: Record<TemplateId, string> = {
@@ -246,6 +276,19 @@ export const TEMPLATE_GUIDE: Record<TemplateId, string> = {
   littlethings: 'Tiny facts, notes and hidden surprises.',
   final: 'A quiet closing page with one last secret.',
   blank: 'An empty page — add photos, text and stickers.',
+  'classic-polaroid': 'Three instant photos taped down with handwritten dates.',
+  'vintage-journal': 'Aged paper, sepia photographs and a diary entry.',
+  'floral-garden': 'Botanical corners, pressed flowers and soft arches.',
+  'photo-collage': 'Four photographs layered into a busy, happy pile.',
+  'love-letter': 'A handwritten letter with one small photograph.',
+  'open-when': 'Four labelled envelopes, one for every kind of day.',
+  'minimal-memory': 'One quiet photograph and a lot of breathing room.',
+  kawaii: 'Pastel gingham, tiny photos and very cute stickers.',
+  editorial: 'A magazine spread with a masthead, pull quote and columns.',
+  timeline: 'A dotted timeline of the days that made the story.',
+  'photo-gallery': 'A dark gallery wall of prints that open into notes.',
+  'secret-surprise': 'A sealed note, a hidden heart and one last surprise.',
+  custom: 'A canvas you arranged yourself, kept as a reusable template.',
 };
 
 export function buildTemplatePage(template: TemplateId, name?: string): Page {

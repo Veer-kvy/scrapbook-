@@ -1,19 +1,16 @@
 import { useState } from 'react';
-import type { BackgroundId, Page, PageTransitionId, TemplateId } from '../../types';
+import type { BackgroundId, Page, PageTransitionId } from '../../types';
 import { useAppStore } from '../../data/store';
 import {
   BACKGROUNDS,
-  TEMPLATE_GUIDE,
-  TEMPLATE_LABELS,
   TRANSITION_OPTIONS,
-  buildTemplatePage,
 } from '../../data/factories';
+import { templateDisplayName } from '../../templates/registry';
 import { navigate } from '../../lib/router';
 import { Icon } from '../UI/Icon';
 import { Modal } from '../UI/Modal';
+import { SaveTemplateModal, TemplatePickerModal } from './TemplatePicker';
 import { AdminHeader, Field, Input, PageThumb, Select } from './ui';
-
-const TEMPLATES = Object.keys(TEMPLATE_LABELS) as TemplateId[];
 const BG_CLASS: Record<BackgroundId, string> = {
   cream: 'bg-paper-cream',
   blush: 'bg-paper-blush',
@@ -22,36 +19,14 @@ const BG_CLASS: Record<BackgroundId, string> = {
   sprinkle: 'bg-paper-sprinkle',
   linen: 'bg-paper-linen',
   ombre: 'bg-paper-ombre',
+  aged: 'bg-paper-aged',
+  ivory: 'bg-paper-ivory',
+  sweet: 'bg-paper-sweet',
+  midnight: 'bg-paper-midnight',
 };
 
 function AddPageModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const addPage = useAppStore((state) => state.addPage);
-  return (
-    <Modal open={open} onClose={onClose} title="Add a page" subtitle="Every template is a starting point — move anything afterwards." size="lg">
-      <div className="grid gap-2 px-5 pb-6 pt-3 sm:grid-cols-2 sm:px-6">
-        {TEMPLATES.map((template) => (
-          <button
-            key={template}
-            type="button"
-            className="admin-card-soft flex items-start gap-3 p-3 text-left transition hover:border-[#c98c9d]/60 hover:bg-[#fffdf7]"
-            onClick={() => {
-              const page = addPage(template);
-              onClose();
-              if (page) navigate(`/admin/pages/${encodeURIComponent(page.id)}`);
-            }}
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#f3dcdc] text-deeprose">
-              <Icon name={template === 'blank' ? 'plus' : 'pages'} size={16} />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-sm font-medium text-ink">{TEMPLATE_LABELS[template]}</span>
-              <span className="mt-0.5 block text-[0.68rem] leading-snug text-ink/50">{TEMPLATE_GUIDE[template]}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-    </Modal>
-  );
+  return <TemplatePickerModal open={open} onClose={onClose} mode="add" />;
 }
 
 function PageSettingsModal({
@@ -69,29 +44,15 @@ function PageSettingsModal({
   const deletePage = useAppStore((state) => state.deletePage);
   const movePage = useAppStore((state) => state.movePage);
   const goToPage = useAppStore((state) => state.goToPage);
-  const notify = useAppStore((state) => state.notify);
-  const [confirmTemplate, setConfirmTemplate] = useState(false);
-  const [template, setTemplate] = useState<TemplateId>(page.template);
+  const resetPageToTemplate = useAppStore((state) => state.resetPageToTemplate);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
 
   const pages = doc?.pages ?? [];
 
-  const rebuild = () => {
-    if (!confirmTemplate) {
-      setConfirmTemplate(true);
-      return;
-    }
-    const replacement = buildTemplatePage(template).elements;
-    useAppStore.getState().updatePage(page.id, (current) => ({
-      ...current,
-      template,
-      elements: replacement,
-    }));
-    notify('Layout replaced from the chosen template.', 'success');
-    setConfirmTemplate(false);
-  };
-
   return (
-    <Modal open onClose={onClose} title={`Page ${index + 1} settings`} subtitle="Names, paper, transitions and layout all live here." size="md">
+    <>
+      <Modal open onClose={onClose} title={`Page ${index + 1} settings`} subtitle="Names, paper, transitions and layout all live here." size="md">
       <div className="space-y-4 px-5 pb-6 pt-3 sm:px-6">
         <Field label="Page name">
           <Input
@@ -137,20 +98,37 @@ function PageSettingsModal({
           </Select>
         </Field>
 
-        <Field label="Start layout from a template" hint="This replaces the elements currently on this page.">
-          <div className="flex gap-2">
-            <Select value={template} onChange={(event) => setTemplate(event.target.value as TemplateId)}>
-              {TEMPLATES.map((id) => (
-                <option key={id} value={id}>
-                  {TEMPLATE_LABELS[id]}
-                </option>
-              ))}
-            </Select>
-            <button type="button" className="chip min-h-10 shrink-0 px-3" onClick={rebuild}>
-              {confirmTemplate ? 'Confirm replace' : 'Replace layout'}
+        <div className="rounded-xl border border-[rgba(156,100,116,.16)] bg-[#fffdf7]/60 p-3">
+          <span className="label">Template</span>
+          <p className="text-sm text-ink">{templateDisplayName(page, doc?.customTemplates)}</p>
+          <p className="mt-0.5 text-[0.66rem] leading-snug text-ink/45">
+            {page.elements.length} elements. Changing the template keeps this page’s name, place in
+            the book and uploaded photos.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <button type="button" className="chip min-h-9" onClick={() => setPickerOpen(true)}>
+              <Icon name="sparkles" size={14} /> Change template
+            </button>
+            <button
+              type="button"
+              className="chip min-h-9"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Reset “${page.name}” to its original template layout? Text and stickers added here will be removed; your photos stay.`,
+                  )
+                ) {
+                  resetPageToTemplate(page.id);
+                }
+              }}
+            >
+              <Icon name="refresh" size={14} /> Reset layout
+            </button>
+            <button type="button" className="chip min-h-9" onClick={() => setSaveOpen(true)}>
+              <Icon name="heart" size={14} /> Save as my template
             </button>
           </div>
-        </Field>
+        </div>
 
         <div className="flex flex-wrap gap-1.5 border-t border-[rgba(156,100,116,.16)] pt-4">
           <button type="button" className="chip min-h-9" onClick={() => duplicatePage(page.id)}>
@@ -199,6 +177,14 @@ function PageSettingsModal({
         </div>
       </div>
     </Modal>
+      <TemplatePickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        mode="replace"
+        page={page}
+      />
+      <SaveTemplateModal open={saveOpen} onClose={() => setSaveOpen(false)} page={page} />
+    </>
   );
 }
 

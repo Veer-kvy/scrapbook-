@@ -18,6 +18,7 @@ import { PublishingScreen } from './PublishingScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { BooksScreen } from './BooksScreen';
 import { ProfileScreen } from './ProfileScreen';
+import { TemplatesScreen } from './TemplatesScreen';
 
 interface NavItem {
   path: string;
@@ -37,6 +38,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/admin/books': 'My scrapbooks',
   '/admin/profile': 'Profile',
   '/admin/pages': 'Scrapbook pages',
+  '/admin/templates': 'Templates',
   '/admin/photos': 'Photo library',
   '/admin/letters': 'Letters & messages',
   '/admin/stickers': 'Stickers & decorations',
@@ -162,6 +164,7 @@ export function AdminShell({ route }: { route: string }) {
     {
       title: 'Design',
       items: [
+        { path: '/admin/templates', label: 'Templates', icon: 'sparkles' },
         { path: '/admin/theme', label: 'Theme & appearance', icon: 'sliders' },
         { path: '/admin/preview', label: 'Preview scrapbook', icon: 'eye' },
       ],
@@ -200,6 +203,7 @@ export function AdminShell({ route }: { route: string }) {
   else if (route === '/admin/letters') content = <LettersScreen />;
   else if (route === '/admin/stickers') content = <StickersScreen />;
   else if (route === '/admin/interactions') content = <InteractionsScreen />;
+  else if (route === '/admin/templates') content = <TemplatesScreen />;
   else if (route === '/admin/theme') content = <ThemeScreen />;
   else if (route === '/admin/preview') content = <PreviewScreen />;
   else if (route === '/admin/publishing') content = <PublishingScreen />;

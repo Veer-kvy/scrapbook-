@@ -2,9 +2,11 @@ import { create } from 'zustand';
 import type {
   BookSummary,
   CustomAsset,
+  CustomTemplate,
   Letter,
   MakerProfile,
   Page,
+  PageStyle,
   PhotoMeta,
   PublishedBookSummary,
   PublishedState,
@@ -30,6 +32,15 @@ import {
   makeText,
 } from './factories';
 import { normalizeTheme, applyTheme } from './theme';
+import {
+  applyCustomTemplateToPage,
+  applyTemplateToPage,
+  buildPageFromTemplate,
+  pageFromCustomTemplate,
+  pageStyle,
+  pageToCustomTemplate,
+} from '../templates/registry';
+import { TEMPLATE_LABELS } from './factories';
 import { putBlob, saveStoredDoc } from './db';
 import { backend } from '../backend';
 import type {
@@ -141,9 +152,26 @@ export interface StoreState {
   updatePage: (pageId: string, updater: (page: Page) => Page) => void;
   updatePageMeta: (
     pageId: string,
-    patch: Partial<Pick<Page, 'name' | 'bg' | 'template' | 'transition'>>,
+    patch: Partial<
+      Pick<Page, 'name' | 'bg' | 'template' | 'transition' | 'templateName' | 'customTemplateId'>
+    >,
   ) => void;
+  updatePageStyle: (pageId: string, patch: Partial<PageStyle>) => void;
   addPage: (template: TemplateId, atIndex?: number) => Page | null;
+  addPageFromCustomTemplate: (templateId: string, atIndex?: number) => Page | null;
+  applyTemplate: (pageId: string, templateId: TemplateId, keepPhotos?: boolean) => boolean;
+  applyCustomTemplate: (pageId: string, templateId: string, keepPhotos?: boolean) => boolean;
+  resetPageToTemplate: (pageId: string) => boolean;
+  savePageAsTemplate: (
+    pageId: string,
+    input: { name: string; description?: string; templateId?: string },
+  ) => CustomTemplate | null;
+  duplicateTemplate: (templateId: string) => CustomTemplate | null;
+  updateCustomTemplate: (
+    templateId: string,
+    patch: Partial<Pick<CustomTemplate, 'name' | 'description'>>,
+  ) => void;
+  deleteCustomTemplate: (templateId: string) => void;
   duplicatePage: (pageId: string) => void;
   deletePage: (pageId: string) => void;
   movePage: (pageId: string, direction: -1 | 1) => void;
@@ -240,12 +268,14 @@ function normalizeDoc(input: ScrapbookDoc): ScrapbookDoc {
     })),
     letters: input.letters ?? [],
     customAssets: input.customAssets ?? [],
+    customTemplates: input.customTemplates ?? [],
     theme: normalizeTheme(input.theme),
     settings: input.settings ?? { volume: 0.6, music: false, sfx: true },
     pages: (input.pages ?? []).map((page) => ({
       ...page,
       transition: page.transition ?? 'turn',
       elements: page.elements ?? [],
+      ...(page.style ? { style: { ...page.style } } : {}),
     })),
   };
 }
@@ -473,7 +503,10 @@ export function validateForPublish(doc: ScrapbookDoc): string[] {
   doc.pages.forEach((page, index) => {
     if (!page.name.trim()) problems.push(`Page ${index + 1} needs a name.`);
     page.elements.forEach((element) => {
-      if (element.kind === 'photo' && !photoIds.has(element.photoId)) {
+      if (element.kind === 'photo' && !element.photoId) {
+        problems.push(`Page ${index + 1} has an empty photo slot. Add a photo or remove the slot.`);
+      }
+      if (element.kind === 'photo' && element.photoId && !photoIds.has(element.photoId)) {
         problems.push(`Page ${index + 1} uses a photograph that is no longer in the library.`);
       }
       if (element.kind === 'custom' && !assetIds.has(element.assetId)) {
@@ -1062,8 +1095,17 @@ export const useAppStore = create<StoreState>()((set, get) => ({
     commit((doc) => updateDocPage(doc, pageId, (page) => ({ ...page, ...patch })));
   },
 
+  updatePageStyle: (pageId, patch) => {
+    commit((doc) =>
+      updateDocPage(doc, pageId, (page) => ({
+        ...page,
+        style: { ...pageStyle(page), ...patch },
+      })),
+    );
+  },
+
   addPage: (template, atIndex) => {
-    const page = buildTemplatePage(template);
+    const page = buildPageFromTemplate(template) ?? buildTemplatePage(template);
     commit((doc) => {
       const pages = [...doc.pages];
       const index = Math.max(0, Math.min(pages.length, atIndex ?? pages.length));
@@ -1077,6 +1119,169 @@ export const useAppStore = create<StoreState>()((set, get) => ({
     }
     get().notify(`“${page.name}” page added.`, 'success');
     return get().doc?.pages.find((p) => p.id === page.id) ?? page;
+  },
+
+  addPageFromCustomTemplate: (templateId, atIndex) => {
+    const template = get().doc?.customTemplates.find((item) => item.id === templateId);
+    if (!template) {
+      get().notify('That template is no longer saved.', 'error');
+      return null;
+    }
+    const page = pageFromCustomTemplate(template);
+    commit((doc) => {
+      const pages = [...doc.pages];
+      const index = Math.max(0, Math.min(pages.length, atIndex ?? pages.length));
+      pages.splice(index, 0, page);
+      return { ...doc, pages };
+    });
+    const doc = get().doc;
+    if (doc) {
+      const index = doc.pages.findIndex((p) => p.id === page.id);
+      set({ pageIndex: index < 0 ? 0 : index, selectedId: null });
+    }
+    get().notify(`“${page.name}” page added from your template.`, 'success');
+    return get().doc?.pages.find((p) => p.id === page.id) ?? page;
+  },
+
+  applyTemplate: (pageId, templateId, keepPhotos = true) => {
+    const page = get().doc?.pages.find((item) => item.id === pageId);
+    const built = buildPageFromTemplate(templateId);
+    if (!page || !built) return false;
+    const next = applyTemplateToPage(page, built, { keepPhotos });
+    commit((doc) => updateDocPage(doc, pageId, () => next));
+    set({ selectedId: null });
+    get().notify(`“${TEMPLATE_LABELS[templateId] ?? 'Template'}” applied to “${page.name}”.`, 'success');
+    return true;
+  },
+
+  applyCustomTemplate: (pageId, templateId, keepPhotos = true) => {
+    const state = get();
+    const page = state.doc?.pages.find((item) => item.id === pageId);
+    const template = state.doc?.customTemplates.find((item) => item.id === templateId);
+    if (!page || !template) return false;
+    const next = applyCustomTemplateToPage(page, template, { keepPhotos });
+    commit((doc) => updateDocPage(doc, pageId, () => next));
+    set({ selectedId: null });
+    get().notify(`“${template.name}” applied to “${page.name}”.`, 'success');
+    return true;
+  },
+
+  resetPageToTemplate: (pageId) => {
+    const state = get();
+    const page = state.doc?.pages.find((item) => item.id === pageId);
+    if (!page) return false;
+    if (page.customTemplateId) {
+      const template = state.doc?.customTemplates.find((item) => item.id === page.customTemplateId);
+      if (!template) {
+        state.notify('This page’s template is no longer saved.', 'error');
+        return false;
+      }
+      return get().applyCustomTemplate(pageId, template.id, true);
+    }
+    const built = buildPageFromTemplate(page.template);
+    if (built) {
+      const next = applyTemplateToPage(page, built, { keepPhotos: true });
+      commit((doc) => updateDocPage(doc, pageId, () => next));
+      set({ selectedId: null });
+      state.notify('Page reset to its original template. Your photos stayed.', 'success');
+      return true;
+    }
+    state.notify('This older page has no saved template to reset to.', 'info');
+    return false;
+  },
+
+  savePageAsTemplate: (pageId, input) => {
+    const state = get();
+    const page = state.doc?.pages.find((item) => item.id === pageId);
+    if (!page) return null;
+    const existing = input.templateId
+      ? state.doc?.customTemplates.find((item) => item.id === input.templateId)
+      : undefined;
+    const template = pageToCustomTemplate(page, input, existing?.id);
+    if (existing) template.createdAt = existing.createdAt;
+    commit((doc) => ({
+      ...doc,
+      customTemplates: existing
+        ? doc.customTemplates.map((item) => (item.id === existing.id ? template : item))
+        : [template, ...doc.customTemplates],
+      pages: doc.pages.map((item) =>
+        item.id === pageId && item.template === 'custom'
+          ? {
+              ...item,
+              templateName: template.name,
+              customTemplateId: template.id,
+              style: item.style ?? { ...template.style },
+            }
+          : item,
+      ),
+    }));
+    state.notify(
+      existing ? `“${template.name}” updated in My Templates.` : `“${template.name}” saved to My Templates.`,
+      'success',
+    );
+    return template;
+  },
+
+  duplicateTemplate: (templateId) => {
+    const state = get();
+    if (!state.doc) return null;
+    const custom = state.doc.customTemplates.find((item) => item.id === templateId);
+    let template: CustomTemplate | null = null;
+    if (custom) {
+      template = {
+        ...structuredClone(custom),
+        id: uid('tpl-'),
+        name: `${custom.name} copy`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+    } else {
+      const page = buildPageFromTemplate(templateId as TemplateId);
+      if (page) {
+        template = pageToCustomTemplate(page, {
+          name: `${page.name} copy`,
+          description: 'Your editable copy of a built-in template.',
+        });
+      }
+    }
+    if (!template) {
+      state.notify('That template cannot be copied.', 'error');
+      return null;
+    }
+    commit((doc) => ({ ...doc, customTemplates: [template!, ...doc.customTemplates] }));
+    state.notify(`“${template.name}” added to My Templates.`, 'success');
+    return template;
+  },
+
+  updateCustomTemplate: (templateId, patch) => {
+    commit((doc) => ({
+      ...doc,
+      customTemplates: doc.customTemplates.map((template) =>
+        template.id === templateId
+          ? { ...template, ...patch, updatedAt: Date.now() }
+          : template,
+      ),
+      pages: doc.pages.map((page) =>
+        page.customTemplateId === templateId
+          ? { ...page, templateName: patch.name ?? page.templateName }
+          : page,
+      ),
+    }));
+  },
+
+  deleteCustomTemplate: (templateId) => {
+    const template = get().doc?.customTemplates.find((item) => item.id === templateId);
+    if (!template) return;
+    commit((doc) => ({
+      ...doc,
+      customTemplates: doc.customTemplates.filter((item) => item.id !== templateId),
+      pages: doc.pages.map((page) =>
+        page.customTemplateId === templateId
+          ? { ...page, customTemplateId: undefined }
+          : page,
+      ),
+    }));
+    get().notify(`“${template.name}” removed from My Templates.`, 'success');
   },
 
   duplicatePage: (pageId) => {

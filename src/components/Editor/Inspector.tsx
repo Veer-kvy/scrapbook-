@@ -7,6 +7,7 @@ import type {
   FrameStyle,
   HiddenElement,
   Page,
+  PageStyle,
   PageTransitionId,
   PhotoElement,
   ScrapbookElement,
@@ -17,12 +18,20 @@ import type {
 import { useAppStore } from '../../data/store';
 import {
   BACKGROUNDS,
-  TEMPLATE_LABELS,
   TRANSITION_OPTIONS,
 } from '../../data/factories';
+import { getTemplate, pageStyle, templateDisplayName } from '../../templates/registry';
+import {
+  BORDER_OPTIONS,
+  ENTRANCE_OPTIONS,
+  HOVER_OPTIONS,
+  SHADOW_OPTIONS,
+  TINT_OPTIONS,
+} from '../../templates/options';
 import { formatDate } from '../../lib/utils';
 import { navigate } from '../../lib/router';
 import { Icon } from '../UI/Icon';
+import { SaveTemplateModal, TemplatePickerModal } from '../Admin/TemplatePicker';
 import { StickerGrid } from './StickerGrid';
 import {
   ColorField,
@@ -41,6 +50,10 @@ const BG_SWATCH: Record<BackgroundId, string> = {
   sprinkle: 'bg-paper-sprinkle',
   linen: 'bg-paper-linen',
   ombre: 'bg-paper-ombre',
+  aged: 'bg-paper-aged',
+  ivory: 'bg-paper-ivory',
+  sweet: 'bg-paper-sweet',
+  midnight: 'bg-paper-midnight',
 };
 
 const TONES: { value: Tone; label: string }[] = [
@@ -379,9 +392,15 @@ function PhotoEditor({
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{photo?.name ?? 'Photo'}</p>
+            <p className="truncate text-sm font-medium">
+              {photo?.name ?? (element.photoId ? 'Photo' : 'Empty photo slot')}
+            </p>
             <p className="mt-0.5 text-[0.68rem] muted">
-              {photo ? `${photo.width} × ${photo.height}` : 'This photograph is unavailable'}
+              {photo
+                ? `${photo.width} × ${photo.height}`
+                : element.photoId
+                  ? 'This photograph is unavailable'
+                  : 'Choose a photo below, or upload a new one.'}
             </p>
             <button
               type="button"
@@ -407,12 +426,18 @@ function PhotoEditor({
             disabled={replacing}
           >
             <Icon name="upload" size={14} />
-            {replacing ? 'Replacing…' : 'Replace file'}
+            {replacing ? 'Uploading…' : photo ? 'Replace file' : 'Upload photo'}
           </button>
-          <button type="button" className="chip min-h-9" onClick={() => onOpenFraming(page.id, element)}>
-            <Icon name="crop" size={14} />
-            Frame
-          </button>
+          {photo && (
+            <button
+              type="button"
+              className="chip min-h-9"
+              onClick={() => onOpenFraming(page.id, element)}
+            >
+              <Icon name="crop" size={14} />
+              Frame
+            </button>
+          )}
           <button
             type="button"
             className="chip min-h-9"
@@ -428,6 +453,57 @@ function PhotoEditor({
             className="sr-only"
             onChange={(event) => void onReplace(event.target.files?.[0])}
           />
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="label mb-0">From your photo library</span>
+            <button
+              type="button"
+              className="text-[0.64rem] underline decoration-[#c98c9d]/60 underline-offset-2 transition hover:text-[#c98c9d]"
+              onClick={() => navigate('/admin/photos')}
+            >
+              Manage
+            </button>
+          </div>
+          {photos && photos.length > 0 ? (
+            <div className="grid max-h-40 grid-cols-4 gap-1.5 overflow-y-auto rounded-xl border hairline p-1.5">
+              {photos.map((item) => {
+                const thumb = mediaUrls[item.id] ?? item.src;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`checker aspect-square overflow-hidden rounded-md border transition ${
+                      element.photoId === item.id
+                        ? 'border-[#9c6474] ring-2 ring-[#c98c9d]/35'
+                        : 'border-transparent hover:border-[#c98c9d]/60'
+                    }`}
+                    title={item.name}
+                    aria-label={`Use ${item.name}`}
+                    aria-pressed={element.photoId === item.id}
+                    onClick={() => patch({ photoId: item.id, caption: element.caption || item.caption, date: element.date || item.date })}
+                  >
+                    {thumb ? (
+                      <img src={thumb} alt="" className="h-full w-full object-cover" loading="lazy" />
+                    ) : (
+                      <span className="grid h-full w-full place-items-center opacity-50">
+                        <Icon name="image" size={16} />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="admin-card-soft w-full px-3 py-2.5 text-left text-[0.7rem] text-ink/60"
+              onClick={() => navigate('/admin/photos')}
+            >
+              Your library is empty. Upload a photograph to fill this slot.
+            </button>
+          )}
         </div>
 
         <div>
@@ -923,11 +999,77 @@ function PageSettings({
   const doc = useAppStore((state) => state.doc);
   const beginGesture = useAppStore((state) => state.beginGesture);
   const endGesture = useAppStore((state) => state.endGesture);
+  const updatePageStyle = useAppStore((state) => state.updatePageStyle);
+  const resetPageToTemplate = useAppStore((state) => state.resetPageToTemplate);
   const [showAssets, setShowAssets] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+
+  const style = pageStyle(page);
+  const definition = getTemplate(page.template);
+  const linkedTemplate = page.customTemplateId
+    ? doc?.customTemplates.find((template) => template.id === page.customTemplateId)
+    : undefined;
+  const version = definition?.version ?? linkedTemplate?.version ?? 1;
+  const canReset = Boolean(definition || linkedTemplate);
 
   return (
+    <>
     <div className="space-y-5">
       <MultiPagePicker pages={pages} activePageId={activePageId} onChange={onActivePageChange} />
+
+      <Section title="Template">
+        <div className="rounded-xl border border-[rgba(156,100,116,.16)] bg-[#fffdf7]/60 p-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-[0.78rem] font-medium text-ink">
+                {templateDisplayName(page, doc?.customTemplates)}
+              </p>
+              <p className="text-[0.62rem] text-ink/45">
+                {page.elements.length} elements · page {pages.findIndex((item) => item.id === page.id) + 1}
+              </p>
+            </div>
+            <span className="admin-tag live shrink-0">v{version}</span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              className="chip min-h-8 justify-center text-[0.66rem]"
+              onClick={() => setPickerOpen(true)}
+            >
+              <Icon name="sparkles" size={12} /> Change template
+            </button>
+            <button
+              type="button"
+              className="chip min-h-8 justify-center text-[0.66rem]"
+              disabled={!canReset}
+              title={
+                canReset
+                  ? 'Restore this page to the layout its template started with'
+                  : 'This older page has no saved template to reset to'
+              }
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Reset “${page.name}” to its original template layout? Text and stickers added here will be removed; your photos stay.`,
+                  )
+                ) {
+                  resetPageToTemplate(page.id);
+                }
+              }}
+            >
+              <Icon name="refresh" size={12} /> Reset layout
+            </button>
+          </div>
+          <button
+            type="button"
+            className="chip mt-1.5 min-h-8 w-full justify-center text-[0.66rem]"
+            onClick={() => setSaveOpen(true)}
+          >
+            <Icon name="heart" size={12} /> Save as my template
+          </button>
+        </div>
+      </Section>
 
       <Section title="This page">
         <div className="space-y-3.5">
@@ -939,9 +1081,6 @@ function PageSettings({
             onChange={(name) => updatePageMeta(page.id, { name })}
             maxLength={60}
           />
-          <p className="text-[0.68rem] muted">
-            {TEMPLATE_LABELS[page.template]} layout · {page.elements.length} elements
-          </p>
           <div>
             <span className="label">Paper</span>
             <div className="grid grid-cols-4 gap-1.5">
@@ -982,6 +1121,138 @@ function PageSettings({
               ))}
             </select>
           </label>
+        </div>
+      </Section>
+
+      <Section title="Look & motion">
+        <div className="space-y-3">
+          <div>
+            <span className="label">Accent</span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <input
+                type="color"
+                value={style.accent}
+                aria-label="Accent colour"
+                className="h-8 w-11 cursor-pointer rounded-lg border border-[rgba(156,100,116,.24)] bg-transparent p-0.5"
+                onChange={(event) => updatePageStyle(page.id, { accent: event.target.value })}
+              />
+              {['#C98C9D', '#B08968', '#7E9A86', '#9C6474', '#D9A0B0', '#6B5B73'].map((swatch) => (
+                <button
+                  key={swatch}
+                  type="button"
+                  className={`h-6 w-6 rounded-full border transition ${
+                    style.accent.toLowerCase() === swatch.toLowerCase()
+                      ? 'border-ink/60 ring-2 ring-[#9c6474]/30'
+                      : 'border-black/10 hover:scale-110'
+                  }`}
+                  style={{ background: swatch }}
+                  aria-label={`Use accent ${swatch}`}
+                  aria-pressed={style.accent.toLowerCase() === swatch.toLowerCase()}
+                  onClick={() => updatePageStyle(page.id, { accent: swatch })}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="label">Paper wash</span>
+              <select
+                className="field"
+                value={style.tint}
+                onChange={(event) =>
+                  updatePageStyle(page.id, { tint: event.target.value as PageStyle['tint'] })
+                }
+              >
+                {TINT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">Border</span>
+              <select
+                className="field"
+                value={style.border}
+                onChange={(event) =>
+                  updatePageStyle(page.id, { border: event.target.value as PageStyle['border'] })
+                }
+              >
+                {BORDER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">Shadow</span>
+              <select
+                className="field"
+                value={style.shadow}
+                onChange={(event) =>
+                  updatePageStyle(page.id, { shadow: event.target.value as PageStyle['shadow'] })
+                }
+              >
+                {SHADOW_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">Entrance</span>
+              <select
+                className="field"
+                value={style.entrance}
+                onChange={(event) =>
+                  updatePageStyle(page.id, { entrance: event.target.value as PageStyle['entrance'] })
+                }
+              >
+                {ENTRANCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">Hover / tap</span>
+              <select
+                className="field"
+                value={style.hover}
+                onChange={(event) =>
+                  updatePageStyle(page.id, { hover: event.target.value as PageStyle['hover'] })
+                }
+              >
+                {HOVER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-end justify-between gap-2 rounded-lg border border-[rgba(156,100,116,.16)] px-2.5 py-2">
+              <span className="text-[0.66rem] leading-snug text-ink/70">
+                Template decoration
+                <span className="mt-0.5 block text-[0.58rem] text-ink/40">
+                  Tape, rules, vines, stamps
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 shrink-0 accent-[#9c6474]"
+                checked={style.decor}
+                onChange={(event) => updatePageStyle(page.id, { decor: event.target.checked })}
+              />
+            </label>
+          </div>
+          <p className="text-[0.6rem] leading-relaxed text-ink/40">
+            Text fonts, colours, frames, stickers and positions live with each element — tap it on the
+            page to edit.
+          </p>
         </div>
       </Section>
 
@@ -1100,6 +1371,14 @@ function PageSettings({
         </Section>
       )}
     </div>
+      <TemplatePickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        mode="replace"
+        page={page}
+      />
+      <SaveTemplateModal open={saveOpen} onClose={() => setSaveOpen(false)} page={page} />
+    </>
   );
 }
 

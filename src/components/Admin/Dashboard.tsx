@@ -1,57 +1,16 @@
 import { useEffect, useState } from 'react';
-import type { Page, TemplateId } from '../../types';
 import { useAppStore } from '../../data/store';
-import { TEMPLATE_GUIDE, TEMPLATE_LABELS } from '../../data/factories';
 import { navigate } from '../../lib/router';
 import { publicLink } from '../../lib/slug';
 import { copyText, relativeTime } from '../../lib/utils';
 import { PageCanvas } from '../Scrapbook/PageCanvas';
 import { Icon } from '../UI/Icon';
-import { Modal } from '../UI/Modal';
 import { Sticker } from '../Stickers/Sticker';
+import { TemplatePickerModal } from './TemplatePicker';
 import { AdminHeader, EmptyState, StatCard } from './ui';
 
-const TEMPLATES = Object.keys(TEMPLATE_LABELS) as TemplateId[];
-
 function NewPageModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const addPage = useAppStore((state) => state.addPage);
-
-  const create = (template: TemplateId) => {
-    const page: Page | null = addPage(template);
-    onClose();
-    if (page) navigate(`/admin/pages/${encodeURIComponent(page.id)}`);
-  };
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Add a page"
-      subtitle="Start from a hand-built layout, then move anything you like."
-      size="lg"
-    >
-      <div className="grid gap-2 px-5 pb-6 pt-3 sm:grid-cols-2 sm:px-6">
-        {TEMPLATES.map((template) => (
-          <button
-            key={template}
-            type="button"
-            className="admin-card-soft flex items-start gap-3 p-3 text-left transition hover:border-[#c98c9d]/60 hover:bg-[#fffdf7]"
-            onClick={() => create(template)}
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#f3dcdc] text-deeprose">
-              <Icon name={template === 'blank' ? 'plus' : 'pages'} size={16} />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-sm font-medium text-ink">{TEMPLATE_LABELS[template]}</span>
-              <span className="mt-0.5 block text-[0.68rem] leading-snug text-ink/50">
-                {TEMPLATE_GUIDE[template]}
-              </span>
-            </span>
-          </button>
-        ))}
-      </div>
-    </Modal>
-  );
+  return <TemplatePickerModal open={open} onClose={onClose} mode="add" />;
 }
 
 export function Dashboard() {
