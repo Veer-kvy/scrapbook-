@@ -187,7 +187,7 @@ export function BookViewer({
           <div className="hidden min-w-0 sm:block">
             <p className="truncate font-display text-sm leading-tight text-ink">{doc.meta.title}</p>
             <p className="text-[10px] uppercase tracking-[0.2em] text-deeprose/60">
-              {chrome === 'preview' ? 'draft preview · not published' : `for ${doc.meta.recipient}`}
+              {chrome === 'preview' ? 'draft preview · not published' : `for ${doc.meta.recipient || 'you'}`}
             </p>
           </div>
           {chrome === 'preview' && (

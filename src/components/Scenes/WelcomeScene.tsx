@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useAppStore } from '../../data/store';
+import { currentScope, useAppStore } from '../../data/store';
 import { audio } from '../../lib/audio';
 import { Sticker } from '../Stickers/Sticker';
 import { Icon } from '../UI/Icon';
@@ -25,6 +25,7 @@ export function WelcomeScene() {
 
   if (!doc) return null;
   const { meta } = doc;
+  const recipient = meta.recipient.trim() || 'you';
 
   const openEnvelope = () => {
     if (phase !== 'closed') return;
@@ -65,12 +66,20 @@ export function WelcomeScene() {
 
       <div className="relative z-10 flex min-h-[100dvh] flex-col">
         <header className="flex items-center justify-between px-5 pt-5 sm:px-8 sm:pt-6">
-          <div className="flex items-center gap-2 text-deeprose/80">
+          <div className="flex min-w-0 items-center gap-2 text-deeprose/80">
             <Icon name="book" size={18} />
-            <span className="text-label hidden xs:inline">Kabbu&rsquo;s little scrapbook</span>
-            <span className="text-label xs:hidden">KABBU</span>
+            <span className="text-label truncate">{meta.title || 'Kabbu’s little scrapbook'}</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            {currentScope() === 'public' && (
+              <a
+                href="#/"
+                className="chip min-h-9 px-2.5 text-[0.66rem]"
+                title="Back to the shelf"
+              >
+                <Icon name="chevron-left" size={13} /> Shelf
+              </a>
+            )}
             <SoundControls />
           </div>
         </header>
@@ -124,7 +133,7 @@ export function WelcomeScene() {
                           className="label font-hand"
                           style={{ fontSize: 'clamp(1.05rem, 3.4vw, 1.35rem)' }}
                         >
-                          for {meta.recipient}
+                          for {recipient}
                         </div>
                       </div>
                     </div>
@@ -142,7 +151,7 @@ export function WelcomeScene() {
                       <Icon name="arrow-right" size={17} />
                     </button>
                     <p className="font-serif text-[0.82rem] italic text-ink/55">
-                      made for {meta.recipient}, with a lot of love
+                      made for {recipient}, with a lot of love
                     </p>
                   </div>
                 </motion.div>
@@ -164,7 +173,7 @@ export function WelcomeScene() {
                       {meta.coverNote}
                     </p>
                     <div className="relative z-10 mt-7 flex flex-wrap items-center justify-between gap-4">
-                      <span className="font-hand text-2xl text-deeprose">for {meta.recipient}</span>
+                      <span className="font-hand text-2xl text-deeprose">for {recipient}</span>
                       <button
                         type="button"
                         className="btn btn-primary"

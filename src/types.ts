@@ -269,7 +269,41 @@ export interface PublishedState {
   label: string;
 }
 
+/** One scrapbook in the studio library. The public link is built from `slug`. */
+export interface BookSummary {
+  id: string;
+  slug: string;
+  title: string;
+  recipient: string;
+  updatedAt: number;
+  pageCount: number;
+  photoCount: number;
+  publishedAt: number | null;
+  versionNumber: number | null;
+}
+
+/** A published scrapbook as shown on the public shelf. */
+export interface PublishedBookSummary {
+  id: string;
+  slug: string;
+  title: string;
+  subtitle: string;
+  recipient: string;
+  sender: string;
+  publishedAt: number;
+  versionNumber: number;
+  pageCount: number;
+}
+
+export interface MakerProfile {
+  name: string;
+  note: string;
+  /** Data URL in local mode, storage path when Supabase is configured. */
+  avatar?: string;
+}
+
 export interface StoredVersion extends VersionSummary {
+  bookId: string;
   doc: ScrapbookDoc;
 }
 

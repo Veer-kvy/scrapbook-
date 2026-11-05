@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore, validateForPublish } from '../../data/store';
+import { publicLink } from '../../lib/slug';
+import { copyText, relativeTime } from '../../lib/utils';
 import { Icon } from '../UI/Icon';
-import { AdminHeader, EmptyState, Field, Input, StatCard, relativeTime } from './ui';
+import { AdminHeader, EmptyState, Field, Input, StatCard } from './ui';
 
 function defaultLabel(): string {
   const date = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
@@ -22,7 +24,20 @@ export function PublishingScreen() {
   const loadVersions = useAppStore((state) => state.loadVersions);
   const backendMode = useAppStore((state) => state.backendMode);
   const backendNote = useAppStore((state) => state.backendNote);
+  const books = useAppStore((state) => state.books);
+  const activeBookId = useAppStore((state) => state.activeBookId);
+  const notify = useAppStore((state) => state.notify);
   const [label, setLabel] = useState(defaultLabel);
+
+  const activeBook = books.find((book) => book.id === activeBookId);
+  const liveHref = activeBook ? `#/s/${activeBook.slug}` : '#/';
+
+  const copyLink = async () => {
+    if (!activeBook) return;
+    const link = publicLink(activeBook.slug);
+    const copied = await copyText(link);
+    notify(copied ? 'Public link copied — send it to anyone.' : `Copy this link: ${link}`, copied ? 'success' : 'info');
+  };
 
   useEffect(() => {
     void loadVersions();
@@ -57,7 +72,7 @@ export function PublishingScreen() {
         subtitle="Drafts live only in the studio. Publishing takes a frozen snapshot and serves it to everyone reading the scrapbook."
         actions={
           <a
-            href="#/"
+            href={liveHref}
             target="_blank"
             rel="noreferrer"
             className="builder-tool min-h-10 px-3"
@@ -66,6 +81,44 @@ export function PublishingScreen() {
           </a>
         }
       />
+
+      {activeBook && (
+        <section className="admin-card mb-5 flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#f3dcdc] text-deeprose">
+              <Icon name="link" size={18} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[0.62rem] uppercase tracking-[0.18em] text-deeprose/60">
+                Share this scrapbook
+              </p>
+              <p className="break-all font-mono text-[0.74rem] text-ink/65">
+                {publicLink(activeBook.slug)}
+              </p>
+              <p className="mt-0.5 text-[0.64rem] leading-relaxed text-ink/40">
+                {backendMode === 'local'
+                  ? 'This browser is storing the book, so the link opens here. Connect Supabase to share it with other people.'
+                  : publication
+                    ? 'Anyone with this link can open the live version — no sign-in needed.'
+                    : 'The link shows a quiet “not live yet” page until you publish for the first time.'}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" className="chip min-h-9 px-3 text-[0.7rem]" onClick={() => void copyLink()}>
+              <Icon name="copy" size={13} /> Copy link
+            </button>
+            <a
+              href={liveHref}
+              target="_blank"
+              rel="noreferrer"
+              className="builder-tool min-h-9 px-3 text-[0.7rem]"
+            >
+              <Icon name="arrow-right" size={13} /> Open
+            </a>
+          </div>
+        </section>
+      )}
 
       <div className="mb-5 grid gap-3 sm:grid-cols-3">
         <StatCard

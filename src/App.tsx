@@ -49,13 +49,26 @@ function BootNotice() {
 export default function App() {
   const route = useHashRoute();
   const admin = isAdminRoute(route);
+  const slug = publicSlugFor(route);
 
   return (
     <div className="relative min-h-[100dvh] w-full">
-      {admin ? <AdminApp route={route} /> : <PublicApp />}
+      {admin ? <AdminApp route={route} /> : <PublicApp slug={slug} />}
       <BootNotice />
       <NoteDialog />
       <Toast />
     </div>
   );
+}
+
+/** `/s/<slug>` is a single published scrapbook; every other public route is the shelf. */
+function publicSlugFor(route: string): string | null {
+  if (!route.startsWith('/s/')) return null;
+  const raw = route.slice(3).replace(/\/+$/, '');
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }

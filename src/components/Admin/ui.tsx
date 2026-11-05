@@ -1,22 +1,9 @@
 import type { ReactNode, InputHTMLAttributes, TextareaHTMLAttributes, SelectHTMLAttributes } from 'react';
 import type { Page } from '../../types';
 import { useAppStore } from '../../data/store';
+import { relativeTime } from '../../lib/utils';
 import { PageCanvas } from '../Scrapbook/PageCanvas';
-import { Icon } from '../UI/Icon';
-
-export function relativeTime(timestamp: number | null | undefined): string {
-  if (!timestamp) return 'never';
-  const diff = Date.now() - timestamp;
-  if (diff < 45_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)} min ago`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} h ago`;
-  return new Date(timestamp).toLocaleDateString(undefined, {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+import { Icon, type IconName } from '../UI/Icon';
 
 export function AdminHeader({
   title,
@@ -99,7 +86,7 @@ export function EmptyState({
   body,
   action,
 }: {
-  icon?: 'sparkles' | 'image' | 'pages' | 'mail' | 'sticker' | 'heart';
+  icon?: IconName;
   title: string;
   body: string;
   action?: ReactNode;

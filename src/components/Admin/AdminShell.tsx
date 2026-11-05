@@ -16,6 +16,8 @@ import { ThemeScreen } from './ThemeScreen';
 import { PreviewScreen } from './PreviewScreen';
 import { PublishingScreen } from './PublishingScreen';
 import { SettingsScreen } from './SettingsScreen';
+import { BooksScreen } from './BooksScreen';
+import { ProfileScreen } from './ProfileScreen';
 
 interface NavItem {
   path: string;
@@ -32,6 +34,8 @@ interface NavGroup {
 const ROUTE_TITLES: Record<string, string> = {
   '/admin': 'Dashboard',
   '/admin/dashboard': 'Dashboard',
+  '/admin/books': 'My scrapbooks',
+  '/admin/profile': 'Profile',
   '/admin/pages': 'Scrapbook pages',
   '/admin/photos': 'Photo library',
   '/admin/letters': 'Letters & messages',
@@ -87,6 +91,9 @@ function NavList({
 }
 
 function Brand() {
+  const books = useAppStore((state) => state.books);
+  const activeBookId = useAppStore((state) => state.activeBookId);
+  const activeBook = books.find((book) => book.id === activeBookId);
   return (
     <a href="#/admin/dashboard" className="admin-brand">
       <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-[#c98c9d]/35 bg-[rgba(255,248,238,.8)] text-deeprose">
@@ -96,8 +103,12 @@ function Brand() {
         </span>
       </span>
       <span className="min-w-0">
-        <span className="block font-display text-[0.98rem] leading-tight text-ink">Kabbu&rsquo;s scrapbook</span>
-        <span className="block text-[0.58rem] uppercase tracking-[0.22em] text-deeprose/60">private studio</span>
+        <span className="block truncate font-display text-[0.98rem] leading-tight text-ink">
+          {activeBook?.title || 'Kabbu’s scrapbook'}
+        </span>
+        <span className="block text-[0.58rem] uppercase tracking-[0.22em] text-deeprose/60">
+          private studio
+        </span>
       </span>
     </a>
   );
@@ -110,7 +121,12 @@ export function AdminShell({ route }: { route: string }) {
   const dirty = useAppStore((state) => state.dirty);
   const saveState = useAppStore((state) => state.saveState);
   const publication = useAppStore((state) => state.publication);
+  const books = useAppStore((state) => state.books);
+  const activeBookId = useAppStore((state) => state.activeBookId);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  const activeBook = books.find((book) => book.id === activeBookId);
+  const liveHref = activeBook ? `#/s/${activeBook.slug}` : '#/';
 
   useEffect(() => {
     setMenuOpen(false);
@@ -127,7 +143,11 @@ export function AdminShell({ route }: { route: string }) {
   const groups: NavGroup[] = [
     {
       title: 'Overview',
-      items: [{ path: '/admin/dashboard', label: 'Dashboard', icon: 'book' }],
+      items: [
+        { path: '/admin/dashboard', label: 'Dashboard', icon: 'book' },
+        { path: '/admin/books', label: 'My scrapbooks', icon: 'pages', count: books.length },
+        { path: '/admin/profile', label: 'Profile', icon: 'user' },
+      ],
     },
     {
       title: 'Content',
@@ -171,6 +191,8 @@ export function AdminShell({ route }: { route: string }) {
 
   let content: ReactNode;
   if (route === '/admin' || route === '/admin/dashboard') content = <Dashboard />;
+  else if (route === '/admin/books') content = <BooksScreen />;
+  else if (route === '/admin/profile') content = <ProfileScreen />;
   else if (route === '/admin/pages') content = <PagesScreen />;
   else if (route.startsWith('/admin/pages/')) {
     content = <BuilderScreen pageId={decodeURIComponent(route.slice('/admin/pages/'.length))} />;
@@ -248,22 +270,26 @@ export function AdminShell({ route }: { route: string }) {
           <div className="hidden md:block">
             <SoundControls />
           </div>
-          <a
-            href="#/admin/preview"
-            className="builder-tool hidden sm:inline-flex"
-            title="Preview the scrapbook"
-          >
-            <Icon name="eye" size={14} /> Preview
-          </a>
-          <a
-            href="#/"
-            target="_blank"
-            rel="noreferrer"
-            className="builder-tool hidden md:inline-flex"
-            title="Open the live scrapbook in a new tab"
-          >
-            <Icon name="arrow-right" size={14} /> Live
-          </a>
+          <div className="hidden sm:block">
+            <a
+              href="#/admin/preview"
+              className="builder-tool"
+              title="Preview the scrapbook"
+            >
+              <Icon name="eye" size={14} /> Preview
+            </a>
+          </div>
+          <div className="hidden md:block">
+            <a
+              href={liveHref}
+              target="_blank"
+              rel="noreferrer"
+              className="builder-tool"
+              title="Open the live scrapbook in a new tab"
+            >
+              <Icon name="arrow-right" size={14} /> Live
+            </a>
+          </div>
           <button
             type="button"
             className="btn btn-primary min-h-9 px-3 text-[0.74rem]"

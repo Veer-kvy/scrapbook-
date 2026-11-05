@@ -33,6 +33,10 @@ export function SettingsScreen() {
   const restoreBackup = useAppStore((state) => state.restoreBackup);
   const signOut = useAppStore((state) => state.signOut);
   const notify = useAppStore((state) => state.notify);
+  const books = useAppStore((state) => state.books);
+  const activeBookId = useAppStore((state) => state.activeBookId);
+
+  const activeBook = books.find((book) => book.id === activeBookId);
 
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
@@ -60,26 +64,29 @@ export function SettingsScreen() {
 
   const exportBackup = async () => {
     try {
+      const wanted = new Set(
+        [
+          ...doc.photos.map((photo) => photo.blobId),
+          ...doc.customAssets.map((asset) => asset.blobId),
+        ].filter((key): key is string => Boolean(key)),
+      );
       const blobs = await loadAllBlobs();
       const encoded: Record<string, { type: string; dataUrl: string }> = {};
       for (const [key, blob] of blobs) {
+        if (!wanted.has(key)) continue;
         encoded[key] = { type: blob.type, dataUrl: await blobToDataUrl(blob) };
       }
-      const safeDoc: ScrapbookDoc = {
-        ...doc,
-        meta: { ...doc.meta, passHash: '' },
-      };
       const payload = {
         kind: BACKUP_KIND,
         exportedAt: Date.now(),
-        doc: safeDoc,
+        doc: { ...doc, meta: { ...doc.meta, passHash: '' } } satisfies ScrapbookDoc,
         blobs: encoded,
       };
       const file = new Blob([JSON.stringify(payload)], { type: 'application/json' });
       const url = URL.createObjectURL(file);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `kabbu-scrapbook-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      link.download = `kabbu-${activeBook?.slug ?? 'scrapbook'}-backup-${new Date().toISOString().slice(0, 10)}.json`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -106,16 +113,13 @@ export function SettingsScreen() {
       for (const [key, entry] of Object.entries(payload.blobs ?? {})) {
         blobs.set(key, await dataUrlToBlob(entry.dataUrl));
       }
-      const restored: ScrapbookDoc = {
-        ...payload.doc,
-        meta: { ...payload.doc.meta, passHash: doc.meta.passHash },
-      };
-      if (!window.confirm('Replace the current draft with this backup? The live book is unaffected until you publish.')) {
+      const restored: ScrapbookDoc = payload.doc;
+      if (!window.confirm(`Replace the draft of “${doc.meta.title}” with this backup? The live book is unaffected until you publish.`)) {
         return;
       }
       setReplacing(true);
       await restoreBackup(restored, blobs);
-      notify('Backup restored into the draft.', 'success');
+      notify('Backup restored into this scrapbook’s draft.', 'success');
     } catch (error) {
       notify(error instanceof Error ? error.message : 'That backup could not be restored.', 'error');
     } finally {
@@ -295,8 +299,8 @@ export function SettingsScreen() {
           <section className="admin-card p-4 sm:p-5">
             <h2 className="font-display text-lg text-ink">Backup</h2>
             <p className="mt-1 text-[0.72rem] leading-relaxed text-ink/50">
-              Download the whole draft and every photo as one file. Your current passcode is never
-              included in the backup.
+              Download this scrapbook’s draft and every photo it uses as one file. Your current
+              passcode is never included in the backup.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button

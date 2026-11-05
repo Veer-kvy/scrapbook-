@@ -6,10 +6,11 @@ The project has two clearly separated surfaces:
 
 | Surface | Address | Who it is for | What it can do |
 | --- | --- | --- | --- |
-| **Public scrapbook** | `#/` | Anyone with the link | Open the envelope, turn pages, flip Polaroids, open letters, find hidden notes. Read-only. |
-| **Admin studio** | `#/admin/login` | The administrator only | Edit pages, photos, letters, stickers, interactions, theme, publish and restore versions. |
+| **Public shelf** | `#/` | Anyone with the link | See the maker's profile and every published scrapbook. |
+| **A single scrapbook** | `#/s/<slug>` | Anyone with that book's link | Open the envelope, turn pages, flip Polaroids, open letters, find hidden notes. Read-only. |
+| **Admin studio** | `#/admin/login` | The administrator only | Create several scrapbooks, edit pages, photos, letters, stickers, interactions, theme, publish and restore versions. |
 
-The public app never mounts an editor, never receives write credentials, and only reads the latest **published snapshot**. Drafts are never exposed.
+Each scrapbook has its own address (`#/s/the-second-little-book`), so one book can be shared without exposing the others. The public app never mounts an editor, never receives write credentials, and only reads the latest **published snapshot**. Drafts are never exposed.
 
 Built with React 19, TypeScript 5.9, Vite 7, Tailwind CSS 3.4, GSAP and Framer Motion. Fonts are self-hosted with Fontsource. No UI kit and no external image host.
 
@@ -31,13 +32,24 @@ Node 20.19+ / 22.12+ is required by Vite 7 (developed on Node 24).
 
 There is **no default passcode**. On the first visit to `#/admin/login` the studio asks you to create one (at least four characters, stored as a salted hash). The session lasts for the browser tab.
 
-The app seeds itself with seven demo pages and sample photographs in `public/photos/`, and publishes that first version locally so the public link has something to show. Replace or delete the samples from the studio to make it yours.
+The app seeds itself with seven demo pages and sample photographs in `public/photos/`, creates a first scrapbook, and publishes that first version locally so a public link has something to show. Replace or delete the samples from the studio to make it yours.
+
+In local mode every scrapbook lives in **this browser**, so a copied link opens on this device. Configure Supabase (below) to send links that work on someone else's phone.
+
+### Scrapbook links
+
+- The studio's **My scrapbooks** screen lists every book with its link, page count, publication state, and actions to edit, rename, duplicate or delete.
+- **Publishing** shows the current book's link with **Copy link** and **Open** buttons. Publishing is what makes the link live; until then it shows a quiet “not live yet” page.
+- Links are built from the book's slug. Change the slug under **Details** on the books screen — old links stop working when you do.
+- `#/` is the public shelf: the maker's profile plus every published book. Share that link to show the whole collection.
 
 ### Admin routes
 
 ```
 #/admin/login          sign in / first-run passcode
-#/admin/dashboard      counts, quick actions, recent versions
+#/admin/dashboard      counts, quick actions, recent versions, copy link
+#/admin/books          every scrapbook, its link, and its details
+#/admin/profile        maker name and note shown on the public shelf
 #/admin/pages          page manager (create, duplicate, reorder, delete)
 #/admin/pages/:id      visual page builder
 #/admin/photos         photo library (upload, albums, replace, delete)
@@ -46,7 +58,7 @@ The app seeds itself with seven demo pages and sample photographs in `public/pho
 #/admin/interactions   tap behaviour for photos, envelopes, secrets, buttons
 #/admin/theme          palette, paper, fonts, motion
 #/admin/preview        full draft preview, read-only
-#/admin/publishing     publish, version history, restore
+#/admin/publishing     publish, share link, version history, restore
 #/admin/settings       book details, sound, account, backup
 ```
 
@@ -86,11 +98,14 @@ Only the **anon** key belongs in the browser. RLS makes it safe. **Never** put t
 Open the Supabase SQL editor and run [`supabase/schema.sql`](supabase/schema.sql). It creates:
 
 - `admin_users` — allow-list of administrators (RLS enabled, no client policies)
-- `scrapbook_settings`, `scrapbook_pages`, `media_assets`, `letters`, `scrapbook_assets`, `scrapbook_interactions` — draft content
-- `scrapbook_versions`, `scrapbook_publication` — immutable published snapshots and the live pointer
-- `get_published_snapshot()` — the only anonymous read path
-- `publish_version(...)` — admin-only publishing RPC that prunes to 25 versions
-- the private `scrapbook-media` Storage bucket plus policies
+- `books` — one row per scrapbook: unique slug, title, recipient, revision, and the whole draft as `jsonb` (text and metadata only, no image bytes)
+- `scrapbook_versions`, `scrapbook_publication` — immutable published snapshots per book and the live pointer
+- `scrapbook_profile` — the maker profile shown on the public shelf
+- `get_published_by_slug(slug)`, `list_published_books()`, `get_maker_profile()` — the only anonymous read paths
+- `publish_version(...)` — admin-only publishing RPC that prunes to 25 versions per book
+- the private `scrapbook-media` Storage bucket plus policies; signed URLs are used for reads
+
+**Upgrading from the first single-book schema?** Run the `drop table … cascade` block at the top of the file first. The old `scrapbook_versions` has no `book_id`, and the script uses `create table if not exists`, so leaving it in place would break publishing and the public links. Download any content you want to keep from the studio before dropping, then rebuild it in the new multi-book studio.
 
 ### 3. Create the administrator
 
@@ -113,12 +128,13 @@ Only users listed in `admin_users` pass the `is_admin()` check used by every tab
 
 ### What changes in Supabase mode
 
-- Draft content lives in Postgres; photos and decorations live in the private bucket and are read through short-lived signed URLs.
+- Draft content lives in Postgres; photos and decorations live in the private bucket under `draft/books/<bookId>/…` and are read through short-lived signed URLs.
 - Only metadata is stored in database rows — never image bytes.
-- `saveDraft` uses a `revision` compare-and-set, so two open tabs cannot silently overwrite each other. The studio shows a conflict with **Retry** and **Reload**.
+- `saveDraft` uses a `revision` compare-and-set per book, so two open tabs cannot silently overwrite each other. The studio shows a conflict with **Retry** and **Reload**.
 - Publishing copies every referenced file into `published/<versionId>/…` before writing the snapshot. Later draft edits or deletions cannot break the live book.
-- The public app reads **only** `get_published_snapshot()`. If nothing has been published it shows a friendly “not published yet” screen.
-- Backup download still works. Restore is local-only; with Supabase, use the dashboard/SQL editor.
+- The public app reads **only** the published snapshot RPCs. A book that has never been published shows a friendly “this link isn’t live yet” screen.
+- Links work on any device, and `#/` lists only books that have been published.
+- Backup download still works (per book). Restore is local-only; with Supabase, use the dashboard/SQL editor.
 
 ### Security properties
 
@@ -142,7 +158,8 @@ Only users listed in `admin_users` pass the `is_admin()` check used by every tab
 | Letters | Categories, handwriting fonts, ink colour/size, paper styles, envelope tone, opening animation, hidden postscript |
 | Interactions | Configure tap behaviour per element without code; target-page picker; envelope→letter linking |
 | Theme | 5 palettes, paper textures, three font roles, Polaroid styles, shadows, button shapes, motion intensity, decoration toggle; instant studio preview |
-| Publishing | Draft validation, version labels, progress, immutable snapshots, frozen media, history, restore into draft |
+| Publishing | Draft validation, version labels, progress, immutable snapshots, frozen media, history, restore into draft, copyable per-book link |
+| Library & profile | Several scrapbooks side by side, unique slug per book, duplicate/delete, maker profile and public shelf at `#/` |
 | Persistence | Debounced autosave, save-state indicator, network retry, conflict handling, undo/redo, JSON backup download |
 | Sound | Synthesised ambient pad and interface sounds, independent music/SFX toggles, volume, never autoplayed |
 | Responsive | 320, 375, 390, 430, 768, 1024, 1440 px; portrait and landscape; no horizontal overflow |
@@ -156,12 +173,13 @@ Every visible control is wired. There are no placeholder buttons and no fake syn
 
 ### Local mode (no env vars)
 
-- The document lives in **IndexedDB** (`kabbu-scrapbook`, store `docs`, key `scrapbook`).
+- Documents live in **IndexedDB** (`kabbu-scrapbook`, store `docs`, keyed by `bookId`); the `books` store holds each book's slug and summary.
 - Photo and decoration binaries live in the `blobs` store and are referenced by `blobId`; they are never embedded in the document.
-- Published versions live in the `versions` store; the live pointer lives in `meta`.
+- Published versions live in the `versions` store (tagged with `bookId`); the live pointer for each book lives in `meta` as `pub:<bookId>`.
 - A `localStorage` copy is used only if IndexedDB is unavailable.
-- Saves are debounced; the top bar shows **Saving…**, **Saved**, **Not saved**, or **Newer draft exists**.
+- Saves are debounced per book; the top bar shows **Saving…**, **Saved**, **Not saved**, or **Newer draft exists**.
 - Undo/redo keeps up to 50 document snapshots; drags and resizes coalesce into one step.
+- Links and the public shelf work inside this browser only. Nothing is uploaded.
 
 ### Upload limits
 
@@ -169,7 +187,7 @@ JPG, PNG, WebP, AVIF and HEIC are accepted up to 30 MB each. Photos are downscal
 
 ### Backup
 
-**Settings → Backup → Download backup** writes one JSON file containing the draft and every local media file as a data URL. The current passcode hash is deliberately excluded. Restoring asks for confirmation and only replaces the draft — the live book changes on the next publish.
+**Settings → Backup → Download backup** writes one JSON file for the **open scrapbook**, containing its draft and every media file it uses as a data URL. The current passcode hash is deliberately excluded. Restoring asks for confirmation and only replaces that book's draft — the live book changes on the next publish. Restore is available in local mode only.
 
 ---
 
@@ -184,10 +202,11 @@ src/
     supabase.ts               Auth + Postgres + Storage adapter
     index.ts                  backend selection
   components/
-    Admin/                    studio shell, dashboard, pages, builder, photos,
-                              letters, stickers, interactions, theme, preview,
-                              publishing, settings
-    Public/PublicApp.tsx      read-only scrapbook entry
+    Admin/                    studio shell, dashboard, books library, profile,
+                              pages, builder, photos, letters, stickers,
+                              interactions, theme, preview, publishing, settings
+    Public/                   PublicApp (single book) and ShelfScreen (shelf,
+                              missing-link and error states)
     Scenes/                   welcome envelope and cover
     Scrapbook/                page canvas, book viewer, spread, flip, elements
     Editor/                   inspector, memories library, framing, sticker grid
@@ -199,7 +218,7 @@ src/
     theme.ts                  palettes, font stacks, applyTheme
     factories.ts              templates and element constructors
   hooks/                      hash route, app effects, layout helpers
-  lib/                        router, audio, local auth hashing, image pipeline
+  lib/                        router, audio, local auth hashing, image pipeline, slugs
   styles/index.css            paper, book, studio and responsive styling
 supabase/schema.sql           tables, RLS, RPCs, storage policies
 public/photos/                sample photographs
@@ -215,3 +234,4 @@ public/photos/                sample photographs
 - **Deleting** a photo or decoration that is in use is guarded and, for decorations, removes the placed elements after confirmation. Replacing a photo keeps its id, so every page layout stays intact.
 - **Reduced motion:** `prefers-reduced-motion` removes page-turn, cover, float and modal animations; the motion theme also has a “Calm” setting.
 - **Unsaved changes:** the studio warns before signing out or closing the tab while edits are pending.
+- **Sharing:** send `#/s/<slug>` for one book, or `#/` for the shelf. Publish first — an unpublished link shows a gentle “not live yet” page.

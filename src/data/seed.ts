@@ -809,3 +809,21 @@ export function createSeedDoc(): ScrapbookDoc {
     ],
   };
 }
+
+/** A brand new scrapbook in the studio starts from the same hand-built pages. */
+export function createBookDoc(title: string): ScrapbookDoc {
+  const doc = createSeedDoc();
+  return {
+    ...doc,
+    meta: {
+      ...doc.meta,
+      title: title.trim() || 'A new scrapbook',
+      recipient: '',
+      welcomeNote: 'Someone made a little something for you…',
+      coverNote: '',
+      passHash: '',
+      passHint: '',
+    },
+    updatedAt: Date.now(),
+  };
+}

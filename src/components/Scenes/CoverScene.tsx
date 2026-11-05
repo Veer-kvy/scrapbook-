@@ -19,6 +19,7 @@ export function CoverScene() {
 
   if (!doc) return null;
   const { meta, pages } = doc;
+  const recipient = meta.recipient.trim() || 'you';
   const firstPage = pages[0];
 
   const openCover = () => {
@@ -70,7 +71,7 @@ export function CoverScene() {
 
         <main className="flex flex-1 flex-col items-center justify-center px-5 py-7 sm:py-8">
           <p className="mb-5 font-serif text-[0.7rem] uppercase tracking-[0.38em] text-deeprose/55">
-            for {meta.recipient}
+            for {recipient}
           </p>
 
           <div
@@ -145,7 +146,7 @@ export function CoverScene() {
                 <p className="max-w-[24ch] font-serif text-[0.95rem] italic leading-snug text-ink/65">
                   {meta.subtitle}
                 </p>
-                <p className="font-hand text-[1.6rem] text-deeprose">for {meta.recipient}</p>
+                <p className="font-hand text-[1.6rem] text-deeprose">for {recipient}</p>
                 <span className="flex flex-col items-center gap-1">
                   <span className="text-[0.5rem] uppercase tracking-[0.28em] text-ink/45">
                     {pages.length} little pages · est. 2025

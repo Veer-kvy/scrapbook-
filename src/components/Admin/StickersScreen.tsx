@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../data/store';
 import { navigate } from '../../lib/router';
+import { relativeTime } from '../../lib/utils';
 import { StickerGrid } from '../Editor/StickerGrid';
 import { Icon } from '../UI/Icon';
-import { AdminHeader, EmptyState, Input, Select, relativeTime } from './ui';
+import { AdminHeader, EmptyState, Input, Select } from './ui';
 
 export function StickersScreen() {
   const doc = useAppStore((state) => state.doc);

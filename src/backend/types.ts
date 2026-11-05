@@ -1,4 +1,11 @@
-import type { PublishedState, ScrapbookDoc, VersionSummary } from '../types';
+import type {
+  BookSummary,
+  MakerProfile,
+  PublishedBookSummary,
+  PublishedState,
+  ScrapbookDoc,
+  VersionSummary,
+} from '../types';
 
 export type BackendMode = 'local' | 'supabase';
 
@@ -15,6 +22,8 @@ export interface SignInInput {
 
 export interface MediaUploadInput {
   id: string;
+  /** Scrapbook the media belongs to; used to namespace files in cloud storage. */
+  bookId?: string;
   blob: Blob;
   thumbnail?: Blob;
   width: number;
@@ -52,10 +61,19 @@ export interface PublishedSnapshot {
   label: string;
 }
 
+export interface BookPatch {
+  title?: string;
+  slug?: string;
+  recipient?: string;
+}
+
 /**
  * The contract every content store implements. The local adapter persists to
  * IndexedDB; the Supabase adapter persists to Postgres + Storage and enforces
  * authorization with signed-in sessions and RLS.
+ *
+ * Every book-scoped call takes an explicit `bookId`, so several scrapbooks can
+ * live side by side and each gets its own public link.
  */
 export interface ContentBackend {
   mode: BackendMode;
@@ -72,18 +90,35 @@ export interface ContentBackend {
   requiresSetup?(): Promise<boolean>;
   /** Creates the very first administrator (local passcode). */
   setup?(input: SignInInput): Promise<AuthUser>;
+  /** Local passcode only; cloud accounts change the password in Supabase. */
+  changePasscode?(newPass: string): Promise<void>;
 
-  loadDraft(): Promise<ScrapbookDoc | null>;
-  saveDraft(doc: ScrapbookDoc, options?: SaveOptions): Promise<{ updatedAt: number }>;
-  loadPublished(): Promise<PublishedSnapshot | null>;
-  listVersions(): Promise<VersionSummary[]>;
+  listBooks(): Promise<BookSummary[]>;
+  createBook(title: string): Promise<BookSummary>;
+  duplicateBook(bookId: string): Promise<BookSummary>;
+  updateBook(bookId: string, patch: BookPatch): Promise<BookSummary>;
+  deleteBook(bookId: string): Promise<void>;
+
+  loadDraft(bookId: string): Promise<ScrapbookDoc | null>;
+  saveDraft(bookId: string, doc: ScrapbookDoc, options?: SaveOptions): Promise<{ updatedAt: number }>;
+
+  loadPublished(bookId: string): Promise<PublishedSnapshot | null>;
+  findPublishedBySlug(slug: string): Promise<PublishedSnapshot | null>;
+  listPublishedBooks(): Promise<PublishedBookSummary[]>;
+  listVersions(bookId: string): Promise<VersionSummary[]>;
   publish(
+    bookId: string,
     doc: ScrapbookDoc,
     label: string,
     onProgress?: (progress: PublishProgress) => void,
   ): Promise<VersionSummary>;
-  restoreVersion(versionId: string): Promise<ScrapbookDoc>;
-  getPublication(): Promise<PublishedState | null>;
+  restoreVersion(bookId: string, versionId: string): Promise<ScrapbookDoc>;
+  getPublication(bookId: string): Promise<PublishedState | null>;
+
+  loadProfile(): Promise<MakerProfile | null>;
+  saveProfile(profile: MakerProfile): Promise<void>;
+  /** Profile as shown on the public shelf, readable without signing in. */
+  loadPublicProfile?(): Promise<MakerProfile | null>;
 
   resolveMedia(doc: ScrapbookDoc): Promise<Record<string, string>>;
   uploadPhoto(input: MediaUploadInput): Promise<MediaUploadResult>;

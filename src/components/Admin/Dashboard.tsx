@@ -3,11 +3,13 @@ import type { Page, TemplateId } from '../../types';
 import { useAppStore } from '../../data/store';
 import { TEMPLATE_GUIDE, TEMPLATE_LABELS } from '../../data/factories';
 import { navigate } from '../../lib/router';
+import { publicLink } from '../../lib/slug';
+import { copyText, relativeTime } from '../../lib/utils';
 import { PageCanvas } from '../Scrapbook/PageCanvas';
 import { Icon } from '../UI/Icon';
 import { Modal } from '../UI/Modal';
 import { Sticker } from '../Stickers/Sticker';
-import { AdminHeader, EmptyState, StatCard, relativeTime } from './ui';
+import { AdminHeader, EmptyState, StatCard } from './ui';
 
 const TEMPLATES = Object.keys(TEMPLATE_LABELS) as TemplateId[];
 
@@ -57,13 +59,42 @@ export function Dashboard() {
   const publication = useAppStore((state) => state.publication);
   const versions = useAppStore((state) => state.versions);
   const loadVersions = useAppStore((state) => state.loadVersions);
+  const books = useAppStore((state) => state.books);
+  const activeBookId = useAppStore((state) => state.activeBookId);
+  const notify = useAppStore((state) => state.notify);
   const [newPage, setNewPage] = useState(false);
+
+  const activeBook = books.find((book) => book.id === activeBookId);
+
+  const copyLink = async () => {
+    if (!activeBook) return;
+    const link = publicLink(activeBook.slug);
+    const copied = await copyText(link);
+    notify(copied ? 'Public link copied — send it to anyone.' : `Copy this link: ${link}`, copied ? 'success' : 'info');
+  };
 
   useEffect(() => {
     if (versions.length === 0) void loadVersions();
   }, [versions.length, loadVersions]);
 
   if (!doc) {
+    if (!books.length) {
+      return (
+        <EmptyState
+          title="No scrapbook is open"
+          body="Your studio is empty right now. Start a scrapbook and it will open here, ready for pages and photos."
+          action={
+            <button
+              type="button"
+              className="btn btn-primary min-h-10"
+              onClick={() => navigate('/admin/books')}
+            >
+              <Icon name="plus" size={15} /> Go to my scrapbooks
+            </button>
+          }
+        />
+      );
+    }
     return <EmptyState title="Opening your draft" body="The studio is reading the latest saved draft from this backend." />;
   }
 
@@ -94,9 +125,24 @@ export function Dashboard() {
         title="Your little studio"
         subtitle="Everything readers see comes from a published version. Edit freely here — nothing goes live until you publish."
         actions={
-          <button type="button" className="btn btn-primary min-h-10" onClick={() => setNewPage(true)}>
-            <Icon name="plus" size={15} /> New page
-          </button>
+          <>
+            <a href="#/admin/books" className="chip min-h-10 px-3 text-[0.72rem]">
+              <Icon name="pages" size={14} /> All scrapbooks
+            </a>
+            {activeBook && (
+              <button
+                type="button"
+                className="chip min-h-10 px-3 text-[0.72rem]"
+                onClick={() => void copyLink()}
+                title={publicLink(activeBook.slug)}
+              >
+                <Icon name="link" size={14} /> Copy link
+              </button>
+            )}
+            <button type="button" className="btn btn-primary min-h-10" onClick={() => setNewPage(true)}>
+              <Icon name="plus" size={15} /> New page
+            </button>
+          </>
         }
       />
 

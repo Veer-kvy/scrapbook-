@@ -1,12 +1,44 @@
--- KABBU SCRAPBOOK — private admin CMS schema (Supabase / Postgres)
+-- KABBU SCRAPBOOK — private studio + public links (Supabase / Postgres)
 --
 -- Apply this file in the Supabase SQL editor, then:
---   1. Create the administrator in Authentication → Users (email + password).
---   2. Insert their user id into public.admin_users with the statement at the bottom.
---   3. Put VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.local.
+--   1. Authentication → Users: create the administrator (email + password).
+--   2. Insert their id:
+--        insert into public.admin_users (user_id, email)
+--        values ('<their-user-id>', '<their-email>');
+--   3. Put VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in the build environment.
 --
--- The service-role key is never used by the browser. All admin writes are
--- authorized here by Supabase Auth + row-level security.
+-- The service-role key is never used by the browser. Admin writes are
+-- authorized here by Supabase Auth + row-level security, and the public site
+-- can only ever read published snapshots through security-definer functions.
+--
+-- What lives where:
+--   books                 one row per scrapbook: unique slug, metadata, draft JSON, revision
+--   scrapbook_versions    frozen snapshots created by publish_version()
+--   scrapbook_publication which version each scrapbook currently serves
+--   scrapbook_profile     the maker's public profile (name, note, avatar)
+--   Storage bucket        private scrapbook-media; only published/% is readable by readers
+--
+-- Replaces the earlier single-book schema. If you already applied that one,
+-- the old tables are incompatible with this file: the old scrapbook_versions
+-- has no book_id column, and `create table if not exists` will silently keep
+-- it, so publishing and the public link would fail. Run this once:
+--
+--   drop table if exists
+--     public.scrapbook_interactions,
+--     public.scrapbook_assets,
+--     public.letters,
+--     public.media_assets,
+--     public.scrapbook_pages,
+--     public.scrapbook_settings,
+--     public.scrapbook_versions,
+--     public.scrapbook_publication
+--   cascade;
+--
+-- That deletes the old single-book draft and version history. Export any
+-- content you want to keep from the studio first, then recreate it after
+-- applying this file. A database created with this file needs no drop.
+-- The Storage bucket and its objects are left untouched; the old draft/ and
+-- published/ files become unreferenced and can be deleted from the dashboard.
 
 create extension if not exists pgcrypto;
 
@@ -27,162 +59,163 @@ stable
 security definer
 set search_path = public
 as $$
-  select exists (
-    select 1 from public.admin_users where user_id = auth.uid()
-  );
+  select exists (select 1 from public.admin_users where user_id = auth.uid());
 $$;
 
 revoke all on function public.is_admin() from anon;
 grant execute on function public.is_admin() to authenticated;
 
--- ---------------------------------------------------------------- draft content
-create table if not exists public.scrapbook_settings (
-  id int primary key default 1 check (id = 1),
-  meta_json jsonb not null default '{}'::jsonb,
-  theme_json jsonb not null default '{}'::jsonb,
-  settings_json jsonb not null default '{}'::jsonb,
-  albums_json jsonb not null default '[]'::jsonb,
+-- ---------------------------------------------------------------- scrapbooks
+create table if not exists public.books (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  title text not null default 'A new scrapbook',
+  recipient text not null default '',
   revision bigint not null default 0,
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.scrapbook_pages (
-  id text primary key,
-  title text not null default 'Untitled page',
-  page_type text not null default 'blank',
-  page_order int not null default 0,
-  status text not null default 'draft',
-  content_json jsonb not null default '{}'::jsonb,
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.media_assets (
-  id text primary key,
-  file_path text not null,
-  thumbnail_path text,
-  filename text,
-  mime_type text,
-  file_size bigint not null default 0,
-  metadata_json jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists public.letters (
-  id text primary key,
-  title text not null default 'A letter',
-  category text not null default 'custom',
-  content text not null default '',
-  design_json jsonb not null default '{}'::jsonb,
+  page_count integer not null default 0,
+  photo_count integer not null default 0,
+  draft_json jsonb,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  published_at timestamptz,
+  version_number integer,
+  constraint books_slug_format
+    check (slug ~ '^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$')
 );
 
-create table if not exists public.scrapbook_assets (
-  id text primary key,
-  name text not null default 'Decoration',
-  file_path text not null,
-  mime_type text,
-  width int not null default 0,
-  height int not null default 0,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists public.scrapbook_interactions (
-  id text primary key,
-  page_id text references public.scrapbook_pages (id) on delete cascade,
-  element_id text not null,
-  interaction_type text not null,
-  interaction_config jsonb not null default '{}'::jsonb
-);
-
-create index if not exists scrapbook_interactions_element_idx
-  on public.scrapbook_interactions (element_id);
-
--- ---------------------------------------------------------------- published versions
 create table if not exists public.scrapbook_versions (
   id uuid primary key default gen_random_uuid(),
-  version_number bigint generated always as identity unique,
-  label text not null,
+  book_id uuid not null references public.books (id) on delete cascade,
+  version_number integer not null,
+  label text not null default '',
   snapshot_json jsonb not null,
-  page_count int not null default 0,
-  photo_count int not null default 0,
-  letter_count int not null default 0,
+  page_count integer not null default 0,
+  photo_count integer not null default 0,
+  letter_count integer not null default 0,
   published_at timestamptz not null default now(),
-  published_by uuid references auth.users (id)
+  unique (book_id, version_number)
 );
 
+create index if not exists scrapbook_versions_book_idx
+  on public.scrapbook_versions (book_id, version_number desc);
+
 create table if not exists public.scrapbook_publication (
-  id int primary key default 1 check (id = 1),
-  version_id uuid not null references public.scrapbook_versions (id),
+  book_id uuid primary key references public.books (id) on delete cascade,
+  version_id uuid not null references public.scrapbook_versions (id) on delete cascade,
   published_at timestamptz not null default now()
 );
 
--- ---------------------------------------------------------------- RLS: admins only
-alter table public.scrapbook_settings enable row level security;
-alter table public.scrapbook_pages enable row level security;
-alter table public.media_assets enable row level security;
-alter table public.letters enable row level security;
-alter table public.scrapbook_assets enable row level security;
-alter table public.scrapbook_interactions enable row level security;
+create table if not exists public.scrapbook_profile (
+  id int primary key default 1 check (id = 1),
+  profile_json jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+-- --------------------------------------------------------------------- RLS
+alter table public.books enable row level security;
 alter table public.scrapbook_versions enable row level security;
 alter table public.scrapbook_publication enable row level security;
+alter table public.scrapbook_profile enable row level security;
 
-drop policy if exists admin_all_settings on public.scrapbook_settings;
-create policy admin_all_settings on public.scrapbook_settings
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "admins manage books" on public.books;
+create policy "admins manage books" on public.books
+  for all to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
 
-drop policy if exists admin_all_pages on public.scrapbook_pages;
-create policy admin_all_pages on public.scrapbook_pages
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "admins manage versions" on public.scrapbook_versions;
+create policy "admins manage versions" on public.scrapbook_versions
+  for all to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
 
-drop policy if exists admin_all_media on public.media_assets;
-create policy admin_all_media on public.media_assets
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "admins manage publication" on public.scrapbook_publication;
+create policy "admins manage publication" on public.scrapbook_publication
+  for all to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
 
-drop policy if exists admin_all_letters on public.letters;
-create policy admin_all_letters on public.letters
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "admins manage profile" on public.scrapbook_profile;
+create policy "admins manage profile" on public.scrapbook_profile
+  for all to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
 
-drop policy if exists admin_all_assets on public.scrapbook_assets;
-create policy admin_all_assets on public.scrapbook_assets
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
-
-drop policy if exists admin_all_interactions on public.scrapbook_interactions;
-create policy admin_all_interactions on public.scrapbook_interactions
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
-
-drop policy if exists admin_all_versions on public.scrapbook_versions;
-create policy admin_all_versions on public.scrapbook_versions
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
-
-drop policy if exists admin_all_publication on public.scrapbook_publication;
-create policy admin_all_publication on public.scrapbook_publication
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
-
--- Nothing above is readable by anonymous visitors. Published content is
--- exposed only through the two security-definer functions below.
-
-revoke all on public.scrapbook_settings from anon;
-revoke all on public.scrapbook_pages from anon;
-revoke all on public.media_assets from anon;
-revoke all on public.letters from anon;
-revoke all on public.scrapbook_assets from anon;
-revoke all on public.scrapbook_interactions from anon;
-revoke all on public.scrapbook_versions from anon;
-revoke all on public.scrapbook_publication from anon;
-revoke all on public.admin_users from anon, authenticated;
-
-grant select, insert, update, delete on public.scrapbook_settings to authenticated;
-grant select, insert, update, delete on public.scrapbook_pages to authenticated;
-grant select, insert, update, delete on public.media_assets to authenticated;
-grant select, insert, update, delete on public.letters to authenticated;
-grant select, insert, update, delete on public.scrapbook_assets to authenticated;
-grant select, insert, update, delete on public.scrapbook_interactions to authenticated;
-grant select, insert, update, delete on public.scrapbook_versions to authenticated;
+grant select, insert, update, delete on public.books to authenticated;
+grant select, insert, delete on public.scrapbook_versions to authenticated;
 grant select, insert, update, delete on public.scrapbook_publication to authenticated;
+grant select, insert, update, delete on public.scrapbook_profile to authenticated;
 
--- ---------------------------------------------------------------- public read RPC
-create or replace function public.get_published_snapshot()
+-- ---------------------------------------------------------------- publishing
+-- Creates an immutable snapshot and points the scrapbook at it in one
+-- transaction. Only the signed-in administrator can call this.
+create or replace function public.publish_version(
+  p_book_id uuid,
+  p_snapshot jsonb,
+  p_label text,
+  p_page_count integer,
+  p_photo_count integer,
+  p_letter_count integer
+)
+returns table (id uuid, version_number integer, published_at timestamptz)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_next integer;
+  v_id uuid;
+  v_time timestamptz := now();
+  v_label text;
+begin
+  if not public.is_admin() then
+    raise exception 'Only the administrator can publish scrapbooks';
+  end if;
+
+  perform 1 from public.books where books.id = p_book_id for update;
+  if not found then
+    raise exception 'Scrapbook not found';
+  end if;
+
+  select coalesce(max(v.version_number), 0) + 1
+    into v_next
+    from public.scrapbook_versions v
+   where v.book_id = p_book_id;
+
+  v_label := coalesce(nullif(btrim(p_label), ''), 'Version ' || v_next);
+
+  insert into public.scrapbook_versions (
+    book_id, version_number, label, snapshot_json,
+    page_count, photo_count, letter_count, published_at
+  )
+  values (
+    p_book_id, v_next, v_label, p_snapshot,
+    coalesce(p_page_count, 0), coalesce(p_photo_count, 0), coalesce(p_letter_count, 0), v_time
+  )
+  returning scrapbook_versions.id into v_id;
+
+  insert into public.scrapbook_publication (book_id, version_id, published_at)
+  values (p_book_id, v_id, v_time)
+  on conflict (book_id) do update
+    set version_id = excluded.version_id,
+        published_at = excluded.published_at;
+
+  update public.books
+     set published_at = v_time,
+         version_number = v_next
+   where books.id = p_book_id;
+
+  return query select v_id, v_next, v_time;
+end;
+$$;
+
+revoke all on function public.publish_version(uuid, jsonb, text, integer, integer, integer) from anon;
+grant execute on function public.publish_version(uuid, jsonb, text, integer, integer, integer) to authenticated;
+
+-- ---------------------------------------------------------------- public reads
+-- Readers resolve a shared link (#/s/<slug>) through this function. It only
+-- ever returns the published snapshot for that slug, never a draft.
+create or replace function public.get_published_by_slug(p_slug text)
 returns jsonb
 language sql
 stable
@@ -193,93 +226,84 @@ as $$
     'versionId', v.id,
     'versionNumber', v.version_number,
     'label', v.label,
-    'publishedAt', (extract(epoch from v.published_at) * 1000)::bigint,
+    'publishedAt', (extract(epoch from p.published_at) * 1000)::bigint,
     'doc', v.snapshot_json
   )
-  from public.scrapbook_publication p
+  from public.books b
+  join public.scrapbook_publication p on p.book_id = b.id
   join public.scrapbook_versions v on v.id = p.version_id
-  where p.id = 1;
+  where b.slug = lower(p_slug)
+  limit 1;
 $$;
 
-grant execute on function public.get_published_snapshot() to anon, authenticated;
-
--- ---------------------------------------------------------------- publish RPC
-create or replace function public.publish_version(
-  p_snapshot jsonb,
-  p_label text,
-  p_page_count int default 0,
-  p_photo_count int default 0,
-  p_letter_count int default 0
+-- The shelf: every published scrapbook, newest first.
+create or replace function public.list_published_books()
+returns table (
+  id uuid,
+  slug text,
+  title text,
+  subtitle text,
+  recipient text,
+  sender text,
+  "publishedAt" bigint,
+  "versionNumber" integer,
+  "pageCount" integer
 )
-returns jsonb
-language plpgsql
+language sql
+stable
 security definer
 set search_path = public
 as $$
-declare
-  new_row public.scrapbook_versions;
-begin
-  if not public.is_admin() then
-    raise exception 'Only administrators can publish.' using errcode = '42501';
-  end if;
-
-  insert into public.scrapbook_versions
-    (label, snapshot_json, page_count, photo_count, letter_count, published_by)
-  values
-    (coalesce(nullif(trim(p_label), ''), 'Version'),
-     p_snapshot, p_page_count, p_photo_count, p_letter_count, auth.uid())
-  returning * into new_row;
-
-  insert into public.scrapbook_publication (id, version_id, published_at)
-  values (1, new_row.id, now())
-  on conflict (id) do update
-    set version_id = excluded.version_id,
-        published_at = excluded.published_at;
-
-  -- Keep the 25 newest versions; never delete the one just published.
-  delete from public.scrapbook_versions
-  where id in (
-    select id from public.scrapbook_versions
-    where id <> new_row.id
-    order by version_number desc
-    offset 25
-  );
-
-  return jsonb_build_object(
-    'id', new_row.id,
-    'version_number', new_row.version_number,
-    'label', new_row.label,
-    'published_at', new_row.published_at
-  );
-end;
+  select
+    b.id,
+    b.slug,
+    b.title,
+    coalesce(v.snapshot_json -> 'meta' ->> 'subtitle', ''),
+    coalesce(v.snapshot_json -> 'meta' ->> 'recipient', b.recipient),
+    coalesce(v.snapshot_json -> 'meta' ->> 'sender', ''),
+    (extract(epoch from p.published_at) * 1000)::bigint,
+    v.version_number,
+    coalesce(jsonb_array_length(v.snapshot_json -> 'pages'), 0)
+  from public.books b
+  join public.scrapbook_publication p on p.book_id = b.id
+  join public.scrapbook_versions v on v.id = p.version_id
+  order by p.published_at desc;
 $$;
 
-revoke all on function public.publish_version(jsonb, text, int, int, int) from anon;
-grant execute on function public.publish_version(jsonb, text, int, int, int) to authenticated;
+create or replace function public.get_maker_profile()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    (select profile_json from public.scrapbook_profile where id = 1),
+    'null'::jsonb
+  );
+$$;
+
+revoke all on function public.get_published_by_slug(text) from public;
+revoke all on function public.list_published_books() from public;
+revoke all on function public.get_maker_profile() from public;
+grant execute on function public.get_published_by_slug(text) to anon, authenticated;
+grant execute on function public.list_published_books() to anon, authenticated;
+grant execute on function public.get_maker_profile() to anon, authenticated;
 
 -- ---------------------------------------------------------------- storage
+-- Private bucket. Drafts and published copies both live here; only the
+-- published/ prefix is readable without an admin session.
 insert into storage.buckets (id, name, public)
 values ('scrapbook-media', 'scrapbook-media', false)
 on conflict (id) do nothing;
 
--- Administrators can do anything inside the bucket.
-drop policy if exists admin_all_storage on storage.objects;
-create policy admin_all_storage on storage.objects
+drop policy if exists "admins manage scrapbook media" on storage.objects;
+create policy "admins manage scrapbook media" on storage.objects
   for all to authenticated
   using (bucket_id = 'scrapbook-media' and public.is_admin())
   with check (bucket_id = 'scrapbook-media' and public.is_admin());
 
--- Visitors may read only frozen, published objects (needed for signed URLs).
-drop policy if exists public_read_published_storage on storage.objects;
-create policy public_read_published_storage on storage.objects
+drop policy if exists "readers open published media" on storage.objects;
+create policy "readers open published media" on storage.objects
   for select to anon, authenticated
   using (bucket_id = 'scrapbook-media' and name like 'published/%');
-
--- Draft uploads/deletes have no anonymous policy, so they are unreachable
--- without an authenticated administrator session.
-
--- ---------------------------------------------------------------- first admin
--- Run once after creating the account in Authentication → Users:
---   insert into public.admin_users (user_id, email)
---   select id, email from auth.users where email = 'you@example.com'
---   on conflict (user_id) do nothing;

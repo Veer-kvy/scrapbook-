@@ -1,9 +1,12 @@
 import { create } from 'zustand';
 import type {
+  BookSummary,
   CustomAsset,
   Letter,
+  MakerProfile,
   Page,
   PhotoMeta,
+  PublishedBookSummary,
   PublishedState,
   ScrapbookDoc,
   ScrapbookElement,
@@ -27,15 +30,14 @@ import {
   makeText,
 } from './factories';
 import { normalizeTheme, applyTheme } from './theme';
-import {
-  clearBlobs,
-  loadStoredDoc,
-  putBlob,
-  saveStoredDoc,
-} from './db';
+import { putBlob, saveStoredDoc } from './db';
 import { backend } from '../backend';
-import type { AuthUser, PublishedSnapshot, SignInInput } from '../backend/types';
-import { hashPasscode } from '../lib/auth';
+import type {
+  AuthUser,
+  BookPatch,
+  PublishedSnapshot,
+  SignInInput,
+} from '../backend/types';
 import { makeThumbnail, measureImage, prepareImage } from '../lib/image';
 import { uid } from '../lib/utils';
 import { audio } from '../lib/audio';
@@ -66,6 +68,16 @@ export interface StoreState {
   backendMode: 'local' | 'supabase';
   backendNote: string;
 
+  books: BookSummary[];
+  booksLoading: boolean;
+  activeBookId: string | null;
+  profile: MakerProfile | null;
+
+  shelf: PublishedBookSummary[];
+  shelfLoading: boolean;
+  publicSlug: string | null;
+  publicMissing: boolean;
+
   doc: ScrapbookDoc | null;
   mediaUrls: Record<string, string>;
   published: PublishedSnapshot | null;
@@ -92,7 +104,7 @@ export interface StoreState {
   gestureDirty: boolean;
   toast: Toast | null;
 
-  boot: (scope: AppScope) => Promise<void>;
+  boot: (scope: AppScope, options?: { slug?: string }) => Promise<void>;
   setScene: (scene: Scene) => void;
   goToPage: (index: number) => void;
   select: (id: string | null) => void;
@@ -107,6 +119,15 @@ export interface StoreState {
   clearToast: () => void;
   showNote: (note: NoteOverlay) => void;
   hideNote: () => void;
+
+  loadBooks: () => Promise<void>;
+  openBook: (bookId: string) => Promise<void>;
+  createBook: (title: string) => Promise<BookSummary | null>;
+  duplicateBook: (bookId: string) => Promise<BookSummary | null>;
+  updateBook: (bookId: string, patch: BookPatch) => Promise<boolean>;
+  deleteBook: (bookId: string) => Promise<void>;
+  saveProfile: (profile: MakerProfile) => Promise<void>;
+  loadShelf: () => Promise<void>;
 
   loadVersions: () => Promise<void>;
   publishNow: (label: string) => Promise<VersionSummary | null>;
@@ -181,6 +202,24 @@ let activeScope: AppScope = 'public';
 let mediaUrls: Record<string, string> = {};
 let publishListener: BroadcastChannel | null = null;
 
+const ACTIVE_BOOK_KEY = 'kabbu-active-book';
+
+function rememberActiveBook(bookId: string) {
+  try {
+    localStorage.setItem(ACTIVE_BOOK_KEY, bookId);
+  } catch {
+    // Private browsing can refuse storage; the studio still works for this visit.
+  }
+}
+
+function rememberedActiveBook(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_BOOK_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function revokeMedia() {
   Object.values(mediaUrls).forEach((url) => {
     if (url.startsWith('blob:')) URL.revokeObjectURL(url);
@@ -213,39 +252,59 @@ function normalizeDoc(input: ScrapbookDoc): ScrapbookDoc {
 
 function queueSave(doc: ScrapbookDoc) {
   const state = useAppStore.getState();
-  if (state.scope !== 'admin' || !state.user) return;
+  if (state.scope !== 'admin' || !state.user || !state.activeBookId) return;
   useAppStore.setState({ saveState: 'saving', dirty: true, saveError: null });
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    void flushSave(doc);
+    void flushSave(state.activeBookId!, doc);
   }, 550);
 }
 
-async function flushSave(doc: ScrapbookDoc, force = false) {
+async function flushSave(bookId: string, doc: ScrapbookDoc, force = false) {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = undefined;
   }
   try {
-    const result = await backend.saveDraft(doc, {
+    const result = await backend.saveDraft(bookId, doc, {
       expectedUpdatedAt: baseUpdatedAt,
       force,
     });
     baseUpdatedAt = result.updatedAt;
-    useAppStore.setState({
-      saveState: 'saved',
-      saveError: null,
-      dirty: false,
-      lastSavedAt: result.updatedAt,
-    });
+    useAppStore.setState((state) => ({
+      books: state.books.map((book) =>
+        book.id === bookId
+          ? {
+              ...book,
+              title: doc.meta.title.trim() || book.title,
+              recipient: doc.meta.recipient,
+              updatedAt: result.updatedAt,
+              pageCount: doc.pages.length,
+              photoCount: doc.photos.length,
+            }
+          : book,
+      ),
+      ...(state.activeBookId === bookId
+        ? {
+            saveState: 'saved' as SaveState,
+            saveError: null,
+            dirty: false,
+            lastSavedAt: result.updatedAt,
+          }
+        : {}),
+    }));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not save changes.';
     const conflict = (error as { code?: string }).code === 'conflict';
-    useAppStore.setState({
-      saveState: conflict ? 'conflict' : 'error',
-      saveError: message,
-      dirty: true,
-    });
+    useAppStore.setState((state) => ({
+      ...(state.activeBookId === bookId
+        ? {
+            saveState: (conflict ? 'conflict' : 'error') as SaveState,
+            saveError: message,
+            dirty: true,
+          }
+        : {}),
+    }));
     useAppStore.getState().notify(message, 'error');
   }
 }
@@ -293,24 +352,26 @@ function cascadeSpot(
   };
 }
 
-async function loadAdminContent() {
-  let draft = await backend.loadDraft();
+async function loadAdminContent(bookId: string) {
+  let draft = await backend.loadDraft(bookId);
   if (!draft) {
     draft = createSeedDoc();
-    await backend.saveDraft(draft, { force: true });
+    await backend.saveDraft(bookId, draft, { force: true });
   }
   const doc = normalizeDoc(draft);
   baseUpdatedAt = doc.updatedAt;
   const [urls, versions, publication] = await Promise.all([
     backend.resolveMedia(doc),
-    backend.listVersions().catch(() => [] as VersionSummary[]),
-    backend.getPublication().catch(() => null),
+    backend.listVersions(bookId).catch(() => [] as VersionSummary[]),
+    backend.getPublication(bookId).catch(() => null),
   ]);
   revokeMedia();
   mediaUrls = urls;
   applyTheme(doc.theme);
   audio.setPrefs(doc.settings);
+  rememberActiveBook(bookId);
   useAppStore.setState({
+    activeBookId: bookId,
     doc,
     mediaUrls,
     versions,
@@ -323,23 +384,47 @@ async function loadAdminContent() {
     preview: false,
     selectedId: null,
     pageIndex: 0,
+    scene: 'welcome',
     past: [],
     future: [],
     gestureSnap: null,
   });
 }
 
+/** Opens the studio on the last used scrapbook, creating a first one if needed. */
+async function enterStudio(user: AuthUser) {
+  let books = await backend.listBooks();
+  let active = books.find((book) => book.id === rememberedActiveBook()) ?? books[0];
+  if (!active) {
+    active = await backend.createBook(createSeedDoc().meta.title);
+    books = [active];
+  }
+  const profile = await backend.loadProfile().catch(() => null);
+  await loadAdminContent(active.id);
+  useAppStore.setState({
+    books,
+    profile,
+    user,
+    editor: true,
+    booted: true,
+    scope: 'admin',
+    needsSetup: false,
+  });
+}
+
+/**
+ * Local mode only: the very first scrapbook was already published by earlier
+ * versions of the app, so a fresh browser still has something to open.
+ */
 async function bootstrapLocalPublication() {
   if (backend.mode !== 'local') return;
-  let draft = await backend.loadDraft();
-  if (!draft) {
-    draft = createSeedDoc();
-    await backend.saveDraft(draft, { force: true });
-  }
-  const existing = await backend.loadPublished();
-  if (!existing) {
-    await backend.publish(draft, 'The original scrapbook');
-  }
+  const published = await backend.listPublishedBooks().catch(() => []);
+  if (published.length) return;
+  const books = await backend.listBooks();
+  if (!books.length) return;
+  const first = books[0];
+  const draft = (await backend.loadDraft(first.id)) ?? createSeedDoc();
+  await backend.publish(first.id, draft, 'The original scrapbook');
 }
 
 function listenForPublished() {
@@ -348,22 +433,34 @@ function listenForPublished() {
   publishListener.onmessage = () => {
     const state = useAppStore.getState();
     if (state.scope !== 'public') return;
-    void backend.loadPublished().then(async (snapshot) => {
+    void (async () => {
+      const shelf = await backend.listPublishedBooks().catch(() => state.shelf);
+      useAppStore.setState({ shelf });
+      if (!state.publicSlug) return;
+      const snapshot = await backend.findPublishedBySlug(state.publicSlug);
       if (!snapshot) return;
       const doc = normalizeDoc(snapshot.doc);
       const urls = await backend.resolveMedia(doc);
       revokeMedia();
       mediaUrls = urls;
-      const latest = useAppStore.getState();
       applyTheme(doc.theme);
       audio.setPrefs(doc.settings);
       useAppStore.setState({
         doc,
         mediaUrls,
         published: snapshot,
-        pageIndex: Math.min(latest.pageIndex, Math.max(0, doc.pages.length - 1)),
+        publication: {
+          versionId: snapshot.versionId,
+          versionNumber: snapshot.versionNumber,
+          publishedAt: snapshot.publishedAt,
+          label: snapshot.label,
+        },
+        pageIndex: Math.min(
+          useAppStore.getState().pageIndex,
+          Math.max(0, doc.pages.length - 1),
+        ),
       });
-    });
+    })();
   };
 }
 
@@ -415,6 +512,16 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   backendMode: backend.mode,
   backendNote: backend.storageNote,
 
+  books: [],
+  booksLoading: false,
+  activeBookId: null,
+  profile: null,
+
+  shelf: [],
+  shelfLoading: false,
+  publicSlug: null,
+  publicMissing: false,
+
   doc: null,
   mediaUrls: {},
   published: null,
@@ -441,13 +548,16 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   gestureDirty: false,
   toast: null,
 
-  boot: async (scope) => {
-    if (get().booted && get().scope === scope) return;
+  boot: async (scope, options) => {
+    const slug = options?.slug ?? null;
+    if (get().booted && get().scope === scope && get().publicSlug === slug) return;
     activeScope = scope;
     set({
       booted: false,
       bootError: null,
       scope,
+      publicSlug: slug,
+      publicMissing: false,
       preview: false,
       selectedId: null,
       pageIndex: 0,
@@ -461,13 +571,41 @@ export const useAppStore = create<StoreState>()((set, get) => ({
     try {
       await backend.init();
       if (scope === 'public') {
-        let snapshot = await backend.loadPublished();
-        if (!snapshot) {
+        let shelf = await backend.listPublishedBooks().catch(() => [] as PublishedBookSummary[]);
+        if (!shelf.length && backend.mode === 'local') {
           await bootstrapLocalPublication();
-          snapshot = await backend.loadPublished();
+          shelf = await backend.listPublishedBooks().catch(() => []);
         }
+        const profile = backend.loadPublicProfile
+          ? await backend.loadPublicProfile().catch(() => null)
+          : null;
+        listenForPublished();
+        if (!slug) {
+          set({
+            booted: true,
+            doc: null,
+            published: null,
+            publication: null,
+            shelf,
+            profile,
+            editor: false,
+            user: null,
+          });
+          return;
+        }
+        const snapshot = await backend.findPublishedBySlug(slug);
         if (!snapshot) {
-          set({ booted: true, doc: null, published: null, editor: false, user: null });
+          set({
+            booted: true,
+            doc: null,
+            published: null,
+            publication: null,
+            shelf,
+            profile,
+            publicMissing: true,
+            editor: false,
+            user: null,
+          });
           return;
         }
         const doc = normalizeDoc(snapshot.doc);
@@ -487,13 +625,15 @@ export const useAppStore = create<StoreState>()((set, get) => ({
             publishedAt: snapshot.publishedAt,
             label: snapshot.label,
           },
+          shelf,
+          profile,
+          publicMissing: false,
           editor: false,
           user: null,
           saveState: 'saved',
           dirty: false,
           lastSavedAt: snapshot.publishedAt,
         });
-        listenForPublished();
         return;
       }
 
@@ -503,21 +643,21 @@ export const useAppStore = create<StoreState>()((set, get) => ({
         set({ booted: true, user: null, editor: false, doc: null, needsSetup });
         return;
       }
-      await loadAdminContent();
-      set({ booted: true, user, editor: true, needsSetup: false });
+      await enterStudio(user);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'The scrapbook could not be loaded.';
       if (scope === 'public') {
-        const fallback = normalizeDoc(createSeedDoc());
-        applyTheme(fallback.theme);
         set({
           booted: true,
-          bootError: `${message} Showing a read-only preview instead.`,
-          doc: fallback,
+          bootError: message,
+          doc: null,
+          published: null,
+          publication: null,
+          shelf: [],
+          profile: null,
           editor: false,
           user: null,
-          mediaUrls: {},
         });
       } else {
         set({ booted: true, bootError: message, user: null, doc: null });
@@ -542,17 +682,9 @@ export const useAppStore = create<StoreState>()((set, get) => ({
     set({ authBusy: true, authError: null });
     try {
       const user = await backend.signIn(input);
-      await loadAdminContent();
       activeScope = 'admin';
-      set({
-        authBusy: false,
-        authError: null,
-        user,
-        editor: true,
-        booted: true,
-        scope: 'admin',
-        needsSetup: false,
-      });
+      await enterStudio(user);
+      set({ authBusy: false, authError: null });
       audio.sfx('chime');
       return true;
     } catch (error) {
@@ -572,16 +704,9 @@ export const useAppStore = create<StoreState>()((set, get) => ({
     set({ authBusy: true, authError: null });
     try {
       const user = await backend.setup({ passcode });
-      await loadAdminContent();
       activeScope = 'admin';
-      set({
-        authBusy: false,
-        user,
-        editor: true,
-        booted: true,
-        scope: 'admin',
-        needsSetup: false,
-      });
+      await enterStudio(user);
+      set({ authBusy: false, authError: null });
       return true;
     } catch (error) {
       set({
@@ -594,6 +719,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
 
   signOut: async () => {
     if (saveTimer) clearTimeout(saveTimer);
+    baseUpdatedAt = null;
     await backend.signOut();
     revokeMedia();
     set({
@@ -604,6 +730,12 @@ export const useAppStore = create<StoreState>()((set, get) => ({
       published: null,
       publication: null,
       versions: [],
+      books: [],
+      activeBookId: null,
+      profile: null,
+      shelf: [],
+      publicSlug: null,
+      publicMissing: false,
       past: [],
       future: [],
       dirty: false,
@@ -615,9 +747,9 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   },
 
   saveNow: async (force = false) => {
-    const doc = get().doc;
-    if (!doc || get().scope !== 'admin' || !get().user) return;
-    await flushSave(doc, force);
+    const { doc, activeBookId, scope, user } = get();
+    if (!doc || !activeBookId || scope !== 'admin' || !user) return;
+    await flushSave(activeBookId, doc, force);
   },
 
   retrySave: async () => {
@@ -625,7 +757,9 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   },
 
   reloadDraft: async () => {
-    await loadAdminContent();
+    const bookId = get().activeBookId;
+    if (!bookId) return;
+    await loadAdminContent(bookId);
     get().notify('Draft reloaded from the backend.', 'success');
   },
 
@@ -636,11 +770,143 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   showNote: (note) => set({ note }),
   hideNote: () => set({ note: null }),
 
+  loadBooks: async () => {
+    if (get().scope !== 'admin' || !get().user) return;
+    set({ booksLoading: true });
+    try {
+      const books = await backend.listBooks();
+      set({ books, booksLoading: false });
+    } catch (error) {
+      set({ booksLoading: false });
+      get().notify(
+        error instanceof Error ? error.message : 'Could not load your scrapbooks.',
+        'error',
+      );
+    }
+  },
+
+  openBook: async (bookId) => {
+    const state = get();
+    if (state.scope !== 'admin' || !state.user) return;
+    if (state.activeBookId === bookId && state.doc) return;
+    if (state.doc && state.activeBookId && (state.dirty || state.saveState === 'saving')) {
+      await flushSave(state.activeBookId, state.doc);
+    }
+    await loadAdminContent(bookId);
+  },
+
+  createBook: async (title) => {
+    if (get().scope !== 'admin' || !get().user) return null;
+    try {
+      const book = await backend.createBook(title);
+      set({ books: await backend.listBooks() });
+      await get().openBook(book.id);
+      get().notify(`“${book.title}” is ready to fill.`, 'success');
+      return book;
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'Could not create the scrapbook.',
+        'error',
+      );
+      return null;
+    }
+  },
+
+  duplicateBook: async (bookId) => {
+    if (get().scope !== 'admin' || !get().user) return null;
+    try {
+      const book = await backend.duplicateBook(bookId);
+      set({ books: await backend.listBooks() });
+      await get().openBook(book.id);
+      get().notify(`“${book.title}” is ready to fill.`, 'success');
+      return book;
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'Could not copy the scrapbook.',
+        'error',
+      );
+      return null;
+    }
+  },
+
+  updateBook: async (bookId, patch) => {
+    if (get().scope !== 'admin' || !get().user) return false;
+    try {
+      const updated = await backend.updateBook(bookId, patch);
+      set((state) => ({
+        books: state.books.map((book) => (book.id === bookId ? updated : book)),
+        doc:
+          state.activeBookId === bookId && state.doc
+            ? {
+                ...state.doc,
+                meta: {
+                  ...state.doc.meta,
+                  title: updated.title,
+                  recipient: updated.recipient,
+                },
+              }
+            : state.doc,
+      }));
+      get().notify('Scrapbook details updated.', 'success');
+      return true;
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'Could not update the scrapbook.',
+        'error',
+      );
+      return false;
+    }
+  },
+
+  deleteBook: async (bookId) => {
+    if (get().scope !== 'admin' || !get().user) return;
+    try {
+      await backend.deleteBook(bookId);
+      const books = await backend.listBooks();
+      const wasActive = get().activeBookId === bookId;
+      if (wasActive) set({ books, activeBookId: null, doc: null });
+      else set({ books });
+      if (wasActive && books.length) await loadAdminContent(books[0].id);
+      get().notify('Scrapbook deleted.', 'success');
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'Could not delete the scrapbook.',
+        'error',
+      );
+    }
+  },
+
+  saveProfile: async (profile) => {
+    if (!get().user) return;
+    try {
+      await backend.saveProfile(profile);
+      set({ profile });
+      get().notify('Profile saved. It appears on your public shelf.', 'success');
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'Could not save your profile.',
+        'error',
+      );
+    }
+  },
+
+  loadShelf: async () => {
+    set({ shelfLoading: true });
+    try {
+      const shelf = await backend.listPublishedBooks();
+      set({ shelf, shelfLoading: false });
+    } catch {
+      set({ shelfLoading: false });
+    }
+  },
+
   loadVersions: async () => {
+    const bookId = get().activeBookId;
+    if (!bookId) return;
     set({ versionsLoading: true });
     try {
-      const versions = await backend.listVersions();
-      const publication = await backend.getPublication();
+      const versions = await backend.listVersions(bookId);
+      const publication = await backend.getPublication(bookId);
       set({ versions, publication, versionsLoading: false });
     } catch (error) {
       set({ versionsLoading: false });
@@ -653,7 +919,8 @@ export const useAppStore = create<StoreState>()((set, get) => ({
 
   publishNow: async (label) => {
     const doc = get().doc;
-    if (!doc) return null;
+    const bookId = get().activeBookId;
+    if (!doc || !bookId) return null;
     if (get().scope !== 'admin' || !get().user) {
       get().notify('Sign in as an administrator to publish.', 'error');
       return null;
@@ -669,11 +936,11 @@ export const useAppStore = create<StoreState>()((set, get) => ({
       if (get().saveState === 'error' || get().saveState === 'conflict') {
         throw new Error('Save the draft before publishing.');
       }
-      const summary = await backend.publish(doc, label, (progress) => {
+      const summary = await backend.publish(bookId, doc, label, (progress) => {
         set({ publishProgress: progress });
       });
-      const versions = await backend.listVersions().catch(() => get().versions);
-      set({
+      const versions = await backend.listVersions(bookId).catch(() => get().versions);
+      set((state) => ({
         publishing: false,
         publishProgress: null,
         versions,
@@ -683,7 +950,18 @@ export const useAppStore = create<StoreState>()((set, get) => ({
           publishedAt: summary.publishedAt,
           label: summary.label,
         },
-      });
+        books: state.books.map((book) =>
+          book.id === bookId
+            ? {
+                ...book,
+                publishedAt: summary.publishedAt,
+                versionNumber: summary.versionNumber,
+                pageCount: summary.pageCount,
+                photoCount: summary.photoCount,
+              }
+            : book,
+        ),
+      }));
       get().notify(`Version ${summary.versionNumber} is live.`, 'success');
       return summary;
     } catch (error) {
@@ -697,9 +975,10 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   },
 
   restoreVersion: async (versionId) => {
-    if (get().scope !== 'admin' || !get().user) return;
+    const bookId = get().activeBookId;
+    if (!bookId || get().scope !== 'admin' || !get().user) return;
     try {
-      const restored = normalizeDoc(await backend.restoreVersion(versionId));
+      const restored = normalizeDoc(await backend.restoreVersion(bookId, versionId));
       const urls = await backend.resolveMedia(restored);
       revokeMedia();
       mediaUrls = urls;
@@ -715,7 +994,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
         saveState: 'saving',
         dirty: true,
       });
-      await flushSave(doc);
+      await flushSave(bookId, doc);
       get().notify('Version restored into your draft. Publish when you are ready.', 'success');
     } catch (error) {
       get().notify(
@@ -1025,6 +1304,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
       const dims = await measureImage(file);
       const result = await backend.uploadAsset({
         id,
+        bookId: get().activeBookId ?? undefined,
         blob: file,
         width: dims.width,
         height: dims.height,
@@ -1129,6 +1409,11 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   },
 
   addPhotos: async (files, albumId, onProgress) => {
+    const bookId = get().activeBookId;
+    if (!bookId) {
+      get().notify('Open a scrapbook before adding photographs.', 'error');
+      return { added: 0, errors: ['No scrapbook is open.'] };
+    }
     const errors: string[] = [];
     const added: PhotoMeta[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -1140,6 +1425,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
         const id = uid('photo-');
         const result = await uploaders.photo({
           id,
+          bookId,
           blob: prepared.blob,
           thumbnail,
           width: prepared.width,
@@ -1187,6 +1473,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
       const thumbnail = await makeThumbnail(prepared.blob).catch(() => undefined);
       const result = await backend.replacePhotoFile({
         id: photo.id,
+        bookId: get().activeBookId ?? undefined,
         blob: prepared.blob,
         thumbnail,
         width: prepared.width,
@@ -1322,16 +1609,22 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   },
 
   changePasscode: async (newPass) => {
-    if (backend.mode === 'supabase') {
+    if (!backend.changePasscode) {
       get().notify(
         'Change your password in Supabase Authentication → Users. The editor uses that account.',
         'info',
       );
       return;
     }
-    const hash = await hashPasscode(newPass);
-    commit((doc) => ({ ...doc, meta: { ...doc.meta, passHash: hash } }));
-    get().notify('Admin passcode updated on this device.', 'success');
+    try {
+      await backend.changePasscode(newPass);
+      get().notify('Admin passcode updated for this studio.', 'success');
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'Could not change the passcode.',
+        'error',
+      );
+    }
   },
 
   updateSettings: (patch) => {
@@ -1354,21 +1647,22 @@ export const useAppStore = create<StoreState>()((set, get) => ({
         'Backup restore is available in local mode. With Supabase, restore through the SQL editor.',
       );
     }
+    const bookId = get().activeBookId;
+    if (!bookId) throw new Error('Open a scrapbook before restoring a backup.');
     revokeMedia();
-    await clearBlobs();
-    const urls: Record<string, string> = {};
     for (const [key, blob] of blobs) {
       await putBlob(key, blob);
     }
     const normalized = normalizeDoc({ ...doc, updatedAt: Date.now() });
-    await saveStoredDoc(normalized);
+    await saveStoredDoc(bookId, normalized);
     const resolved = await backend.resolveMedia(normalized);
-    Object.assign(urls, resolved);
     mediaUrls = resolved;
+    baseUpdatedAt = normalized.updatedAt;
     applyTheme(normalized.theme);
+    audio.setPrefs(normalized.settings);
     set({
       doc: normalized,
-      mediaUrls: urls,
+      mediaUrls: resolved,
       pageIndex: 0,
       selectedId: null,
       past: [],
@@ -1378,18 +1672,8 @@ export const useAppStore = create<StoreState>()((set, get) => ({
       lastSavedAt: normalized.updatedAt,
       scene: 'book',
     });
-    audio.setPrefs(normalized.settings);
   },
 }));
-
-/** Warm the public cache before first paint when possible. */
-export async function peekLocalDraft(): Promise<ScrapbookDoc | null> {
-  try {
-    return await loadStoredDoc();
-  } catch {
-    return null;
-  }
-}
 
 export function currentScope(): AppScope {
   return activeScope;
