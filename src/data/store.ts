@@ -211,6 +211,7 @@ export interface StoreState {
   updatePhoto: (photoId: string, patch: Partial<PhotoMeta>) => void;
   deletePhoto: (photoId: string) => Promise<void>;
   addPhotoToPage: (photoId: string, pageId: string) => void;
+  addPhotoAt: (photoId: string, pageId: string, x: number, y: number) => void;
 
   addAlbum: (name: string) => void;
   renameAlbum: (albumId: string, name: string) => void;
@@ -1777,6 +1778,18 @@ export const useAppStore = create<StoreState>()((set, get) => ({
     const index = doc?.pages.findIndex((p) => p.id === pageId) ?? 0;
     set({ pageIndex: Math.max(0, index) });
     get().notify('Photo placed on the page.', 'success');
+  },
+
+  addPhotoAt: (photoId, pageId, x, y) => {
+    const element = makePhoto(photoId, {
+      x: Math.min(Math.max(x - 21, 2), 100 - 42 - 2),
+      y: Math.min(Math.max(y - 18.9, 2), 100 - 37.8 - 2),
+      w: 42,
+      h: 37.8,
+      rot: -2,
+      frame: 'classic',
+    });
+    get().addElement(pageId, element);
   },
 
   addAlbum: (name) => {

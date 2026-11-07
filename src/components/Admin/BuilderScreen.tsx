@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PhotoElement, ScrapbookElement } from '../../types';
 import { useAppStore } from '../../data/store';
 import { navigate } from '../../lib/router';
@@ -220,15 +220,76 @@ export function BuilderScreen({ pageId }: { pageId: string }) {
   const past = useAppStore((state) => state.past);
   const future = useAppStore((state) => state.future);
   const updatePageMeta = useAppStore((state) => state.updatePageMeta);
+  const addPhotos = useAppStore((state) => state.addPhotos);
+  const addPhotoAt = useAppStore((state) => state.addPhotoAt);
+  const notify = useAppStore((state) => state.notify);
 
   const [snap, setSnap] = useState(true);
   const [panel, setPanel] = useState<MobilePanel>(null);
   const [memoriesOpen, setMemoriesOpen] = useState(false);
   const [framing, setFraming] = useState<{ pageId: string; element: PhotoElement } | null>(null);
   const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [dropBusy, setDropBusy] = useState(false);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const dragDepth = useRef(0);
 
   const page = doc?.pages.find((item) => item.id === pageId) ?? null;
   const index = doc?.pages.findIndex((item) => item.id === pageId) ?? -1;
+
+  const hasFiles = (event: React.DragEvent) =>
+    Array.from(event.dataTransfer.types).includes('Files');
+
+  const handleDragEnter = (event: React.DragEvent) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setDropActive(true);
+  };
+
+  const handleDragOver = (event: React.DragEvent) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    if (!hasFiles(event)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDropActive(false);
+  };
+
+  const handleDrop = (event: React.DragEvent) => {
+    if (!hasFiles(event) || !page) return;
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDropActive(false);
+    const files = Array.from(event.dataTransfer.files).filter(
+      (file) => file.type.startsWith('image/') || /\.(heic|heif)$/i.test(file.name),
+    );
+    if (files.length === 0) {
+      notify('Drop JPG, PNG, WebP, HEIC or AVIF images.', 'error');
+      return;
+    }
+    const rect = sheetRef.current?.getBoundingClientRect();
+    const px = rect ? ((event.clientX - rect.left) / rect.width) * 100 : 50;
+    const py = rect ? ((event.clientY - rect.top) / rect.height) * 100 : 50;
+    void (async () => {
+      setDropBusy(true);
+      try {
+        const before = new Set((useAppStore.getState().doc?.photos ?? []).map((photo) => photo.id));
+        await addPhotos(files, null);
+        const added = (useAppStore.getState().doc?.photos ?? []).filter(
+          (photo) => !before.has(photo.id),
+        );
+        added.forEach((photo, offset) => {
+          addPhotoAt(photo.id, page.id, px + offset * 6, py + offset * 5);
+        });
+      } finally {
+        setDropBusy(false);
+      }
+    })();
+  };
 
   useEffect(() => {
     if (index >= 0 && index !== pageIndex) goToPage(index);
@@ -383,13 +444,24 @@ export function BuilderScreen({ pageId }: { pageId: string }) {
           <LayersPanel pageId={page.id} />
         </aside>
 
-        <div className="builder-canvas relative min-w-0 flex-1 overflow-auto">
+        <div
+          className="builder-canvas relative min-w-0 flex-1 overflow-auto"
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           <div className="flex min-h-full items-center justify-center p-3 pb-24 sm:p-6 lg:pb-6">
             <div
               className="w-full"
               style={{ maxWidth: 'min(100%, calc((100dvh - 220px) * 0.75))' }}
             >
-              <div className="relative aspect-[3/4] w-full overflow-hidden rounded-[4px] shadow-lift">
+              <div
+                ref={sheetRef}
+                className={`relative aspect-[3/4] w-full overflow-hidden rounded-[4px] shadow-lift transition ${
+                  dropActive ? 'ring-2 ring-[#c98c9d] ring-offset-2 ring-offset-[#fffaf0]' : ''
+                }`}
+              >
                 <PageCanvas
                   page={page}
                   pageNumber={index + 1}
@@ -399,9 +471,24 @@ export function BuilderScreen({ pageId }: { pageId: string }) {
                   onActivate={() => setPanel(null)}
                   className="absolute inset-0 h-full w-full"
                 />
+                {dropActive && (
+                  <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-[4px] border-2 border-dashed border-[#c98c9d] bg-[rgba(255,248,236,.55)]">
+                    <div className="rounded-2xl bg-[rgba(255,250,240,.94)] px-5 py-3 text-center shadow-paper">
+                      <Icon name="upload" size={22} className="mx-auto text-deeprose" />
+                      <p className="mt-1 font-hand text-xl text-deeprose">drop photos on the page</p>
+                    </div>
+                  </div>
+                )}
+                {dropBusy && (
+                  <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center bg-[rgba(255,248,236,.45)]">
+                    <p className="rounded-full bg-[rgba(45,32,38,.78)] px-4 py-1.5 text-[0.7rem] text-[#fff8ec]">
+                      Adding photos…
+                    </p>
+                  </div>
+                )}
               </div>
               <p className="mt-2 text-center text-[0.62rem] text-ink/40">
-                Drag to move · corner handle to resize · top handle to rotate
+                Drag files from your computer to add photos · drag to move · corner handle to resize
               </p>
             </div>
           </div>
