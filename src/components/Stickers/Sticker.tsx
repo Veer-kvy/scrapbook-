@@ -7,6 +7,38 @@ const WASHI_CLASS: Partial<Record<StickerId, string>> = {
   washiCream: 'washi-cream',
 };
 
+const IMAGE_STICKERS: Partial<Record<StickerId, string>> = {
+  floralPeonyCorner: 'floral-peony-corner.png',
+  floralCamera: 'floral-camera.png',
+  floralPinkButterfly: 'floral-pink-butterfly.png',
+  floralDaisyBunch: 'floral-daisy-bunch.png',
+  floralGreenDaisy: 'floral-green-daisy.png',
+  floralRedRose: 'floral-red-rose.png',
+  floralLineFlowers: 'floral-line-flowers.png',
+  floralSunflowerButterfly: 'floral-sunflower-butterfly.png',
+  floralDahlias: 'floral-dahlias.png',
+  floralHearts: 'floral-hearts.png',
+  floralBooksTeacup: 'floral-books-teacup.png',
+  floralCreamBouquet: 'floral-cream-bouquet.png',
+  floralPoppyDaisy: 'floral-poppy-daisy.png',
+  floralRoseBouquet: 'floral-rose-bouquet.png',
+  floralOpenBook: 'floral-open-book.png',
+  floralStackedBooks: 'floral-stacked-books.png',
+  floralBookshelf: 'floral-bookshelf.png',
+  floralRoseLine: 'floral-rose-line.png',
+  floralLavender: 'floral-lavender.png',
+  floralTulips: 'floral-tulips.png',
+  floralBike: 'floral-bike.png',
+  floralDaisyBouquet: 'floral-daisy-bouquet.png',
+  paperTicketLabel: 'paper-ticket-label.png',
+  paperGridPaper: 'paper-grid-paper.png',
+  paperOvalTags: 'paper-oval-tags.png',
+  paperSpiralPage: 'paper-spiral-page.png',
+  paperOrnateLabel: 'paper-ornate-label.png',
+  paperPolkaPaper: 'paper-polka-paper.png',
+  paperTornStrip: 'paper-torn-strip.png',
+};
+
 const stroke = '#9C6474';
 const ink = '#6F5059';
 
@@ -290,6 +322,19 @@ export function Sticker({ id, className = '' }: { id: StickerId; className?: str
   if (washi) {
     return <span className={`washi ${washi} ${className}`} aria-hidden="true" />;
   }
+  const image = IMAGE_STICKERS[id];
+  if (image) {
+    return (
+      <img
+        src={`${import.meta.env.BASE_URL}stickers/${image}`}
+        alt=""
+        draggable={false}
+        className={`h-full w-full object-contain ${className}`}
+        style={{ filter: 'drop-shadow(0 3px 3px rgba(73,58,64,.18))' }}
+        aria-hidden="true"
+      />
+    );
+  }
   return (
     <svg
       viewBox="0 0 64 64"
@@ -340,6 +385,33 @@ export const STICKER_GROUPS: {
     ],
   },
   {
+    label: 'Vintage',
+    items: [
+      { id: 'floralPeonyCorner', label: 'Peony corner' },
+      { id: 'floralCamera', label: 'Vintage camera' },
+      { id: 'floralPinkButterfly', label: 'Pink butterfly' },
+      { id: 'floralDaisyBunch', label: 'Daisy bunch' },
+      { id: 'floralGreenDaisy', label: 'Green daisy' },
+      { id: 'floralRedRose', label: 'Red rose' },
+      { id: 'floralLineFlowers', label: 'Line-art flowers' },
+      { id: 'floralSunflowerButterfly', label: 'Sunflower + monarch' },
+      { id: 'floralDahlias', label: 'Pink dahlias' },
+      { id: 'floralHearts', label: 'Three hearts' },
+      { id: 'floralBooksTeacup', label: 'Books + teacup' },
+      { id: 'floralCreamBouquet', label: 'Cream bouquet' },
+      { id: 'floralPoppyDaisy', label: 'Poppy + daisy' },
+      { id: 'floralRoseBouquet', label: 'Rose bouquet' },
+      { id: 'floralOpenBook', label: 'Open book + daisies' },
+      { id: 'floralStackedBooks', label: 'Stacked books' },
+      { id: 'floralBookshelf', label: 'Bookshelf' },
+      { id: 'floralRoseLine', label: 'Rose line drawing' },
+      { id: 'floralLavender', label: 'Lavender' },
+      { id: 'floralTulips', label: 'Tulips' },
+      { id: 'floralBike', label: 'Bicycle + flowers' },
+      { id: 'floralDaisyBouquet', label: 'Daisy bouquet' },
+    ],
+  },
+  {
     label: 'Paper',
     items: [
       { id: 'washiRose', label: 'Rose washi' },
@@ -349,6 +421,13 @@ export const STICKER_GROUPS: {
       { id: 'stamp', label: 'Postage stamp' },
       { id: 'clip', label: 'Paper clip' },
       { id: 'arrow', label: 'Doodle arrow' },
+      { id: 'paperTicketLabel', label: 'Ticket label' },
+      { id: 'paperGridPaper', label: 'Graph paper' },
+      { id: 'paperOvalTags', label: 'Oval tags' },
+      { id: 'paperSpiralPage', label: 'Notebook page' },
+      { id: 'paperOrnateLabel', label: 'Ornate label' },
+      { id: 'paperPolkaPaper', label: 'Polka-dot paper' },
+      { id: 'paperTornStrip', label: 'Torn strip' },
     ],
   },
 ];
