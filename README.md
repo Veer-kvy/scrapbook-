@@ -134,7 +134,7 @@ Only users listed in `admin_users` pass the `is_admin()` check used by every tab
 - Publishing copies every referenced file into `published/<versionId>/…` before writing the snapshot. Later draft edits or deletions cannot break the live book.
 - The public app reads **only** the published snapshot RPCs. A book that has never been published shows a friendly “this link isn’t live yet” screen.
 - Links work on any device, and `#/` lists only books that have been published.
-- Backup download still works (per book). Restore is local-only; with Supabase, use the dashboard/SQL editor.
+- Backup download still works (per book). Restore also works in Supabase mode: every media file in the backup is uploaded to the private bucket, then the book's draft row is overwritten. The live book changes only after you publish.
 
 ### Security properties
 
@@ -187,7 +187,7 @@ JPG, PNG, WebP, AVIF and HEIC are accepted up to 30 MB each. Photos are downscal
 
 ### Backup
 
-**Settings → Backup → Download backup** writes one JSON file for the **open scrapbook**, containing its draft and every media file it uses as a data URL. The current passcode hash is deliberately excluded. Restoring asks for confirmation and only replaces that book's draft — the live book changes on the next publish. Restore is available in local mode only.
+**Settings → Backup → Download backup** writes one JSON file for the **open scrapbook**, containing its draft and every media file it uses as a data URL. The current passcode hash is deliberately excluded. Restoring asks for confirmation and only replaces that book's draft — the live book changes on the next publish. In local mode the files are written to IndexedDB; in Supabase mode they are uploaded to the private storage bucket with a progress count, then the draft row is saved.
 
 ---
 

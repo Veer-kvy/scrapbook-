@@ -42,6 +42,7 @@ export function SettingsScreen() {
   const [confirmPass, setConfirmPass] = useState('');
   const [replacing, setReplacing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!doc) return null;
@@ -109,22 +110,29 @@ export function SettingsScreen() {
       if (payload.kind !== BACKUP_KIND || !payload.doc?.pages?.length) {
         throw new Error('That file is not a Kabbu scrapbook backup.');
       }
-      const blobs = new Map<string, Blob>();
-      for (const [key, entry] of Object.entries(payload.blobs ?? {})) {
-        blobs.set(key, await dataUrlToBlob(entry.dataUrl));
-      }
       const restored: ScrapbookDoc = payload.doc;
       if (!window.confirm(`Replace the draft of “${doc.meta.title}” with this backup? The live book is unaffected until you publish.`)) {
         return;
       }
+      const blobs = new Map<string, Blob>();
+      for (const [key, entry] of Object.entries(payload.blobs ?? {})) {
+        blobs.set(key, await dataUrlToBlob(entry.dataUrl));
+      }
       setReplacing(true);
-      await restoreBackup(restored, blobs);
-      notify('Backup restored into this scrapbook’s draft.', 'success');
+      setImportProgress({ done: 0, total: blobs.size });
+      await restoreBackup(restored, blobs, (done, total) => setImportProgress({ done, total }));
+      notify(
+        backendMode === 'supabase'
+          ? 'Backup uploaded into this scrapbook’s Supabase draft. Publish it to make it live.'
+          : 'Backup restored into this scrapbook’s draft.',
+        'success',
+      );
     } catch (error) {
       notify(error instanceof Error ? error.message : 'That backup could not be restored.', 'error');
     } finally {
       setImporting(false);
       setReplacing(false);
+      setImportProgress(null);
       if (fileRef.current) fileRef.current.value = '';
     }
   };
@@ -299,8 +307,8 @@ export function SettingsScreen() {
           <section className="admin-card p-4 sm:p-5">
             <h2 className="font-display text-lg text-ink">Backup</h2>
             <p className="mt-1 text-[0.72rem] leading-relaxed text-ink/50">
-              Download this scrapbook’s draft and every photo it uses as one file. Your current
-              passcode is never included in the backup.
+              Download this scrapbook’s draft and every photo it uses as one file, or restore a
+              backup into the open scrapbook. Your current passcode is never included.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -315,15 +323,14 @@ export function SettingsScreen() {
                 type="button"
                 className="btn btn-ghost min-h-10"
                 onClick={() => fileRef.current?.click()}
-                disabled={importing || replacing || backendMode === 'supabase'}
-                title={
-                  backendMode === 'supabase'
-                    ? 'Backup restore is only available in local mode.'
-                    : undefined
-                }
+                disabled={importing || replacing}
               >
                 <Icon name="upload" size={14} />
-                {importing || replacing ? 'Restoring…' : 'Restore backup'}
+                {importing || replacing
+                  ? importProgress && importProgress.total > 0
+                    ? `Uploading ${importProgress.done}/${importProgress.total}…`
+                    : 'Restoring…'
+                  : 'Restore backup'}
               </button>
               <input
                 ref={fileRef}
@@ -336,10 +343,17 @@ export function SettingsScreen() {
                 }}
               />
             </div>
+            {importProgress && importProgress.total > 0 && (
+              <p className="mt-2 text-[0.66rem] leading-relaxed text-ink/45">
+                {backendMode === 'supabase'
+                  ? `Uploaded ${importProgress.done} of ${importProgress.total} media files to storage.`
+                  : `Restored ${importProgress.done} of ${importProgress.total} media files.`}
+              </p>
+            )}
             {backendMode === 'supabase' && (
               <p className="mt-2 text-[0.66rem] leading-relaxed text-ink/45">
-                With Supabase, data lives in Postgres and Storage — use the Supabase dashboard or SQL
-                editor for restores.
+                With Supabase, restoring uploads every photo to your storage bucket and replaces this
+                scrapbook’s draft. Nothing goes live until you publish from the Publishing tab.
               </p>
             )}
           </section>

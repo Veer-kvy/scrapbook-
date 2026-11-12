@@ -222,7 +222,11 @@ export interface StoreState {
   updateSettings: (patch: Partial<ScrapbookSettings>) => void;
   updateTheme: (patch: Partial<ThemeSettings>) => void;
 
-  restoreBackup: (doc: ScrapbookDoc, blobs: Map<string, Blob>) => Promise<void>;
+  restoreBackup: (
+    doc: ScrapbookDoc,
+    blobs: Map<string, Blob>,
+    onProgress?: (done: number, total: number, current: string) => void,
+  ) => Promise<void>;
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1859,19 +1863,102 @@ export const useAppStore = create<StoreState>()((set, get) => ({
     commit((current) => ({ ...current, theme }));
   },
 
-  restoreBackup: async (doc, blobs) => {
-    if (backend.mode === 'supabase') {
-      throw new Error(
-        'Backup restore is available in local mode. With Supabase, restore through the SQL editor.',
-      );
-    }
+  restoreBackup: async (doc, blobs, onProgress) => {
     const bookId = get().activeBookId;
     if (!bookId) throw new Error('Open a scrapbook before restoring a backup.');
+    const normalized = normalizeDoc({ ...doc, updatedAt: Date.now() });
+
+    if (backend.mode === 'supabase') {
+      const total =
+        normalized.photos.filter((photo) => blobs.has(photo.blobId ?? photo.id)).length +
+        normalized.customAssets.filter((asset) => blobs.has(asset.blobId ?? asset.id)).length;
+      let done = 0;
+
+      const photos: PhotoMeta[] = [];
+      for (const photo of normalized.photos) {
+        const blob = blobs.get(photo.blobId ?? photo.id);
+        if (!blob) {
+          photos.push(photo);
+          continue;
+        }
+        const mimeType = blob.type || photo.mimeType || 'image/webp';
+        const result = await uploaders.photo({
+          id: photo.id,
+          bookId,
+          blob,
+          width: photo.width,
+          height: photo.height,
+          name: photo.name,
+          mimeType,
+        });
+        if (!result.storagePath) throw new Error(`Could not upload the photo “${photo.name}”.`);
+        photos.push({
+          ...photo,
+          storagePath: result.storagePath,
+          blobId: undefined,
+          src: undefined,
+          mimeType,
+          fileSize: blob.size,
+        });
+        done += 1;
+        onProgress?.(done, total, photo.name);
+      }
+
+      const customAssets: CustomAsset[] = [];
+      for (const asset of normalized.customAssets) {
+        const blob = blobs.get(asset.blobId ?? asset.id);
+        if (!blob) {
+          customAssets.push(asset);
+          continue;
+        }
+        const result = await backend.uploadAsset({
+          id: asset.id,
+          bookId,
+          blob,
+          width: asset.width,
+          height: asset.height,
+          name: asset.name,
+          mimeType: blob.type || (asset.format === 'svg' ? 'image/svg+xml' : 'image/png'),
+        });
+        if (!result.storagePath) throw new Error(`Could not upload the decoration “${asset.name}”.`);
+        customAssets.push({ ...asset, storagePath: result.storagePath, blobId: undefined });
+        done += 1;
+        onProgress?.(done, total, asset.name);
+      }
+
+      const restored = normalizeDoc({ ...normalized, photos, customAssets });
+      await backend.saveDraft(bookId, restored, { force: true });
+      revokeMedia();
+      const resolved = await backend.resolveMedia(restored);
+      mediaUrls = resolved;
+      baseUpdatedAt = restored.updatedAt;
+      applyTheme(restored.theme);
+      audio.setPrefs(restored.settings);
+      const books = await backend.listBooks().catch(() => get().books);
+      set({
+        doc: restored,
+        mediaUrls: resolved,
+        books,
+        pageIndex: 0,
+        selectedId: null,
+        past: [],
+        future: [],
+        saveState: 'saved',
+        saveError: null,
+        dirty: false,
+        lastSavedAt: restored.updatedAt,
+        scene: 'book',
+      });
+      return;
+    }
+
     revokeMedia();
+    let done = 0;
     for (const [key, blob] of blobs) {
       await putBlob(key, blob);
+      done += 1;
+      onProgress?.(done, blobs.size, key);
     }
-    const normalized = normalizeDoc({ ...doc, updatedAt: Date.now() });
     await saveStoredDoc(bookId, normalized);
     const resolved = await backend.resolveMedia(normalized);
     mediaUrls = resolved;
