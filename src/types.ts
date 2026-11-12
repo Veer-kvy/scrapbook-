@@ -398,6 +398,8 @@ export interface BookSummary {
   photoCount: number;
   publishedAt: number | null;
   versionNumber: number | null;
+  /** True when readers must type a passcode before the published book opens. */
+  readerLocked?: boolean;
 }
 
 /** A published scrapbook as shown on the public shelf. */
@@ -411,6 +413,7 @@ export interface PublishedBookSummary {
   publishedAt: number;
   versionNumber: number;
   pageCount: number;
+  locked?: boolean;
 }
 
 export interface MakerProfile {

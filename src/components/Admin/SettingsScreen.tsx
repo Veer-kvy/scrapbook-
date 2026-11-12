@@ -31,6 +31,7 @@ export function SettingsScreen() {
   const updateSettings = useAppStore((state) => state.updateSettings);
   const changePasscode = useAppStore((state) => state.changePasscode);
   const restoreBackup = useAppStore((state) => state.restoreBackup);
+  const setReaderLock = useAppStore((state) => state.setReaderLock);
   const signOut = useAppStore((state) => state.signOut);
   const notify = useAppStore((state) => state.notify);
   const books = useAppStore((state) => state.books);
@@ -43,6 +44,8 @@ export function SettingsScreen() {
   const [replacing, setReplacing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [readerPass, setReaderPass] = useState('');
+  const [lockBusy, setLockBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!doc) return null;
@@ -144,6 +147,26 @@ export function SettingsScreen() {
     }
     await signOut();
     navigate('/admin/login', true);
+  };
+
+  const saveReaderLock = async () => {
+    if (readerPass.trim().length < 4) {
+      notify('Use at least four characters for the reader passcode.', 'error');
+      return;
+    }
+    setLockBusy(true);
+    const ok = await setReaderLock(readerPass.trim());
+    setLockBusy(false);
+    if (ok) setReaderPass('');
+  };
+
+  const removeReaderLock = async () => {
+    if (!window.confirm('Remove the reader passcode? Anyone with the link can open this book again.')) {
+      return;
+    }
+    setLockBusy(true);
+    await setReaderLock(null);
+    setLockBusy(false);
   };
 
   return (
@@ -357,6 +380,54 @@ export function SettingsScreen() {
               </p>
             )}
           </section>
+
+          {backendMode === 'supabase' && (
+            <section className="admin-card p-4 sm:p-5">
+              <h2 className="font-display text-lg text-ink">Reader passcode</h2>
+              <p className="mt-1 text-[0.72rem] leading-relaxed text-ink/50">
+                Ask visitors for a passcode before the shared link opens. The check happens on the
+                server — the book&rsquo;s pages stay hidden until the passcode is correct.
+              </p>
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <Field
+                  label={activeBook?.readerLocked ? 'New passcode' : 'Passcode'}
+                  hint="At least four characters. You choose what readers must type."
+                >
+                  <Input
+                    type="password"
+                    value={readerPass}
+                    autoComplete="new-password"
+                    placeholder="Something only your readers know"
+                    onChange={(event) => setReaderPass(event.target.value)}
+                  />
+                </Field>
+                <button
+                  type="button"
+                  className="btn btn-secondary min-h-10"
+                  onClick={() => void saveReaderLock()}
+                  disabled={lockBusy || readerPass.trim().length < 4}
+                >
+                  <Icon name="lock" size={14} />
+                  {activeBook?.readerLocked ? 'Update passcode' : 'Set passcode'}
+                </button>
+                {activeBook?.readerLocked && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost min-h-10"
+                    onClick={() => void removeReaderLock()}
+                    disabled={lockBusy}
+                  >
+                    Remove passcode
+                  </button>
+                )}
+              </div>
+              <p className="mt-2 text-[0.66rem] leading-relaxed text-ink/45">
+                {activeBook?.readerLocked
+                  ? 'This book is locked. Visitors who open the link are asked for the passcode first, and the shelf shows it as private.'
+                  : 'This book is open to anyone who has the link. Set a passcode to make the shared link private.'}
+              </p>
+            </section>
+          )}
         </div>
       </div>
     </div>

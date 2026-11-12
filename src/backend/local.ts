@@ -473,7 +473,7 @@ export const localBackend: ContentBackend = {
     } satisfies PublishedSnapshot;
   },
 
-  async findPublishedBySlug(slug: string) {
+  async findPublishedBySlug(slug: string, _passcode?: string) {
     await ensureLibrary();
     const book = (await loadBooks()).find((entry) => entry.slug === slug);
     if (!book) return null;
@@ -497,6 +497,7 @@ export const localBackend: ContentBackend = {
         publishedAt: snapshot.publishedAt,
         versionNumber: snapshot.versionNumber,
         pageCount: snapshot.doc.pages.length,
+        locked: false,
       });
     }
     return published.sort((a, b) => b.publishedAt - a.publishedAt);

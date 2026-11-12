@@ -101,7 +101,9 @@ Open the Supabase SQL editor and run [`supabase/schema.sql`](supabase/schema.sql
 - `books` — one row per scrapbook: unique slug, title, recipient, revision, and the whole draft as `jsonb` (text and metadata only, no image bytes)
 - `scrapbook_versions`, `scrapbook_publication` — immutable published snapshots per book and the live pointer
 - `scrapbook_profile` — the maker profile shown on the public shelf
-- `get_published_by_slug(slug)`, `list_published_books()`, `get_maker_profile()` — the only anonymous read paths
+- `get_published_by_slug(slug, passcode)`, `list_published_books()`, `get_maker_profile()` — the only anonymous read paths
+- `set_reader_lock(book_id, passcode)` — admin-only reader passcode for a published book (bcrypt hash)
+- `site_switch` + `site_enabled()` — the public kill switch
 - `publish_version(...)` — admin-only publishing RPC that prunes to 25 versions per book
 - the private `scrapbook-media` Storage bucket plus policies; signed URLs are used for reads
 
@@ -189,6 +191,29 @@ JPG, PNG, WebP, AVIF and HEIC are accepted up to 30 MB each. Photos are downscal
 
 **Settings → Backup → Download backup** writes one JSON file for the **open scrapbook**, containing its draft and every media file it uses as a data URL. The current passcode hash is deliberately excluded. Restoring asks for confirmation and only replaces that book's draft — the live book changes on the next publish. In local mode the files are written to IndexedDB; in Supabase mode they are uploaded to the private storage bucket with a progress count, then the draft row is saved.
 
+### Reader passcode
+
+A shared link can ask for a passcode before the book opens. Open the book in the studio → **Settings → Reader passcode**, type at least four characters and press **Set passcode**. **Remove passcode** makes the link public again. The lock applies to the live book immediately — no republish needed — and locked books show a small *passcode* badge on the shelf.
+
+Run `supabase/public-access.sql` once in the Supabase SQL editor before using this if your database was created before the reader passcode existed (the same file adds the kill switch; a fresh `schema.sql` already includes both). Until it is applied, the studio reports that the passcode could not be saved.
+
+The check runs in Postgres (`get_published_by_slug(p_slug, p_passcode)`), so the pages and their photos are not sent to the browser until the passcode matches; a browser that guesses wrongly only receives `{"locked": true}`. Only a bcrypt hash is stored, and only an administrator can change it (`set_reader_lock`). Readers who unlock a book keep it unlocked for that browser tab (session storage), so moving between pages does not ask again.
+
+This is a link-sharing gate, not an account system: there is no rate limit, so pick a passcode you would not mind someone guessing slowly. A determined visitor can still tell that a published book's media files exist in storage — the storage policy is shared by every published book.
+
+### Kill switch
+
+Paste `supabase/public-access.sql` in the Supabase SQL editor once (it also sets up the reader passcode). After that the public site can be closed and reopened instantly, without a redeploy:
+
+```sql
+-- OFF
+update public.site_switch set enabled = false, updated_at = now();
+-- ON
+update public.site_switch set enabled = true, updated_at = now();
+```
+
+While OFF, shared links resolve to nothing, the shelf is empty, the profile is hidden, and no new signed media URLs are issued. The admin studio keeps working. Media links issued within the previous 24 hours stay valid until they expire — media signed URLs live for 24h. For a total blackout of the app shell itself, also unpublish the site in GitHub → Settings → Pages.
+
 ---
 
 ## Project layout
@@ -221,6 +246,7 @@ src/
   lib/                        router, audio, local auth hashing, image pipeline, slugs
   styles/index.css            paper, book, studio and responsive styling
 supabase/schema.sql           tables, RLS, RPCs, storage policies
+supabase/public-access.sql    reader passcode + kill switch for an existing database
 public/photos/                sample photographs
 ```
 

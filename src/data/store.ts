@@ -88,6 +88,8 @@ export interface StoreState {
   shelfLoading: boolean;
   publicSlug: string | null;
   publicMissing: boolean;
+  /** The shared link exists but needs a reader passcode before it opens. */
+  publicLocked: boolean;
 
   doc: ScrapbookDoc | null;
   mediaUrls: Record<string, string>;
@@ -139,6 +141,9 @@ export interface StoreState {
   deleteBook: (bookId: string) => Promise<void>;
   saveProfile: (profile: MakerProfile) => Promise<void>;
   loadShelf: () => Promise<void>;
+  unlockPublicBook: (passcode: string) => Promise<boolean>;
+  /** Admin only: set or clear (null) the reader passcode for the open book. */
+  setReaderLock: (passcode: string | null) => Promise<boolean>;
 
   loadVersions: () => Promise<void>;
   publishNow: (label: string) => Promise<VersionSummary | null>;
@@ -258,6 +263,58 @@ function revokeMedia() {
     if (url.startsWith('blob:')) URL.revokeObjectURL(url);
   });
   mediaUrls = {};
+}
+
+function readerPassKey(slug: string): string {
+  return `kabbu-reader-pass:${slug}`;
+}
+
+function readReaderPass(slug: string): string | null {
+  try {
+    return sessionStorage.getItem(readerPassKey(slug));
+  } catch {
+    return null;
+  }
+}
+
+function rememberReaderPass(slug: string, passcode: string) {
+  try {
+    sessionStorage.setItem(readerPassKey(slug), passcode);
+  } catch {
+    // Private browsing can refuse storage; the reader can retype it.
+  }
+}
+
+async function applyPublicSnapshot(snapshot: PublishedSnapshot) {
+  const doc = normalizeDoc(snapshot.doc);
+  const urls = await backend.resolveMedia(doc);
+  revokeMedia();
+  mediaUrls = urls;
+  applyTheme(doc.theme);
+  audio.setPrefs(doc.settings);
+  useAppStore.setState({
+    doc,
+    mediaUrls: urls,
+    published: snapshot,
+    publication: {
+      versionId: snapshot.versionId,
+      versionNumber: snapshot.versionNumber,
+      publishedAt: snapshot.publishedAt,
+      label: snapshot.label,
+    },
+    publicMissing: false,
+    publicLocked: false,
+    editor: false,
+    user: null,
+    saveState: 'saved',
+    dirty: false,
+    lastSavedAt: snapshot.publishedAt,
+    scene: 'welcome',
+    pageIndex: 0,
+    selectedId: null,
+    past: [],
+    future: [],
+  });
 }
 
 function normalizeDoc(input: ScrapbookDoc): ScrapbookDoc {
@@ -472,8 +529,22 @@ function listenForPublished() {
       const shelf = await backend.listPublishedBooks().catch(() => state.shelf);
       useAppStore.setState({ shelf });
       if (!state.publicSlug) return;
-      const snapshot = await backend.findPublishedBySlug(state.publicSlug);
+      const snapshot = await backend.findPublishedBySlug(
+        state.publicSlug,
+        readReaderPass(state.publicSlug) ?? undefined,
+      );
       if (!snapshot) return;
+      if ('locked' in snapshot) {
+        revokeMedia();
+        useAppStore.setState({
+          doc: null,
+          mediaUrls: {},
+          published: null,
+          publication: null,
+          publicLocked: true,
+        });
+        return;
+      }
       const doc = normalizeDoc(snapshot.doc);
       const urls = await backend.resolveMedia(doc);
       revokeMedia();
@@ -559,6 +630,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
   shelfLoading: false,
   publicSlug: null,
   publicMissing: false,
+  publicLocked: false,
 
   doc: null,
   mediaUrls: {},
@@ -596,6 +668,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
       scope,
       publicSlug: slug,
       publicMissing: false,
+      publicLocked: false,
       preview: false,
       selectedId: null,
       pageIndex: 0,
@@ -631,7 +704,7 @@ export const useAppStore = create<StoreState>()((set, get) => ({
           });
           return;
         }
-        const snapshot = await backend.findPublishedBySlug(slug);
+        const snapshot = await backend.findPublishedBySlug(slug, readReaderPass(slug) ?? undefined);
         if (!snapshot) {
           set({
             booted: true,
@@ -641,37 +714,29 @@ export const useAppStore = create<StoreState>()((set, get) => ({
             shelf,
             profile,
             publicMissing: true,
+            publicLocked: false,
             editor: false,
             user: null,
           });
           return;
         }
-        const doc = normalizeDoc(snapshot.doc);
-        const urls = await backend.resolveMedia(doc);
-        revokeMedia();
-        mediaUrls = urls;
-        applyTheme(doc.theme);
-        audio.setPrefs(doc.settings);
-        set({
-          booted: true,
-          doc,
-          mediaUrls,
-          published: snapshot,
-          publication: {
-            versionId: snapshot.versionId,
-            versionNumber: snapshot.versionNumber,
-            publishedAt: snapshot.publishedAt,
-            label: snapshot.label,
-          },
-          shelf,
-          profile,
-          publicMissing: false,
-          editor: false,
-          user: null,
-          saveState: 'saved',
-          dirty: false,
-          lastSavedAt: snapshot.publishedAt,
-        });
+        if ('locked' in snapshot) {
+          set({
+            booted: true,
+            doc: null,
+            published: null,
+            publication: null,
+            shelf,
+            profile,
+            publicMissing: false,
+            publicLocked: true,
+            editor: false,
+            user: null,
+          });
+          return;
+        }
+        await applyPublicSnapshot(snapshot);
+        set({ booted: true, shelf, profile });
         return;
       }
 
@@ -935,6 +1000,50 @@ export const useAppStore = create<StoreState>()((set, get) => ({
       set({ shelf, shelfLoading: false });
     } catch {
       set({ shelfLoading: false });
+    }
+  },
+
+  unlockPublicBook: async (passcode) => {
+    const slug = get().publicSlug;
+    if (!slug) return false;
+    try {
+      const found = await backend.findPublishedBySlug(slug, passcode);
+      if (!found) {
+        set({ publicMissing: true, publicLocked: false });
+        return false;
+      }
+      if ('locked' in found) return false;
+      rememberReaderPass(slug, passcode);
+      await applyPublicSnapshot(found);
+      return true;
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'That passcode could not be checked.',
+        'error',
+      );
+      return false;
+    }
+  },
+
+  setReaderLock: async (passcode) => {
+    const bookId = get().activeBookId;
+    if (!bookId || !backend.setReaderLock) return false;
+    try {
+      await backend.setReaderLock(bookId, passcode);
+      set({ books: await backend.listBooks() });
+      get().notify(
+        passcode
+          ? 'Reader passcode saved. The link asks for it before the book opens.'
+          : 'Reader passcode removed. Anyone with the link can open the book.',
+        'success',
+      );
+      return true;
+    } catch (error) {
+      get().notify(
+        error instanceof Error ? error.message : 'Could not save the reader passcode.',
+        'error',
+      );
+      return false;
     }
   },
 

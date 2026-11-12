@@ -6,7 +6,7 @@ import { copyText, relativeTime } from '../../lib/utils';
 import { Icon } from '../UI/Icon';
 import { Sticker } from '../Stickers/Sticker';
 
-function ShelfBackdrop() {
+export function ShelfBackdrop() {
   return (
     <>
       <div className="app-backdrop" aria-hidden="true" />
@@ -124,8 +124,15 @@ function BookCard({
         <span className="line-clamp-2 font-serif text-sm italic leading-relaxed text-ink/60">
           {book.subtitle || `made for ${book.recipient || 'someone lovely'} by ${book.sender || 'someone who loves them'}`}
         </span>
-        <span className="mt-1 flex items-center gap-1.5 text-[0.74rem] text-deeprose transition group-hover:gap-2.5">
-          Open the book <Icon name="arrow-right" size={13} />
+        <span className="mt-1 flex items-center justify-between gap-2 text-[0.74rem] text-deeprose">
+          <span className="flex items-center gap-1.5 transition group-hover:gap-2.5">
+            Open the book <Icon name="arrow-right" size={13} />
+          </span>
+          {book.locked && (
+            <span className="flex items-center gap-1 rounded-full bg-[#f1dde0] px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.12em] text-deeprose/80">
+              <Icon name="lock" size={10} /> passcode
+            </span>
+          )}
         </span>
       </span>
     </a>

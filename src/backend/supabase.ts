@@ -18,6 +18,7 @@ import {
   type MediaUploadInput,
   type MediaUploadResult,
   type PublishProgress,
+  type PublishedLookup,
   type PublishedSnapshot,
   type SaveOptions,
 } from './types';
@@ -75,6 +76,7 @@ interface BookRow {
   page_count: number | null;
   photo_count: number | null;
   draft_json: ScrapbookDoc | null;
+  reader_lock_hash?: string | null;
 }
 
 function toSummary(row: BookRow): BookSummary {
@@ -88,6 +90,7 @@ function toSummary(row: BookRow): BookSummary {
     photoCount: Number(row.photo_count ?? 0),
     publishedAt: row.published_at ? Date.parse(row.published_at) : null,
     versionNumber: row.version_number == null ? null : Number(row.version_number),
+    readerLocked: Boolean(row.reader_lock_hash),
   };
 }
 
@@ -479,11 +482,15 @@ export const supabaseBackend: ContentBackend = {
     };
   },
 
-  async findPublishedBySlug(slug: string): Promise<PublishedSnapshot | null> {
+  async findPublishedBySlug(slug: string, passcode?: string): Promise<PublishedLookup | null> {
     const sb = await getClient();
-    const { data, error } = await sb.rpc('get_published_by_slug', { p_slug: slug });
+    const { data, error } = await sb.rpc('get_published_by_slug', {
+      p_slug: slug,
+      p_passcode: passcode ?? null,
+    });
     if (error) fail(error, 'Could not open that scrapbook');
     if (!data) return null;
+    if ((data as { locked?: boolean }).locked === true) return { locked: true };
     const payload = data as {
       versionId: string;
       versionNumber: number;
@@ -514,7 +521,17 @@ export const supabaseBackend: ContentBackend = {
       publishedAt: Number(row.publishedAt ?? 0),
       versionNumber: Number(row.versionNumber ?? 0),
       pageCount: Number(row.pageCount ?? 0),
+      locked: Boolean(row.locked),
     }));
+  },
+
+  async setReaderLock(bookId: string, passcode: string | null): Promise<void> {
+    const sb = await getClient();
+    const { error } = await sb.rpc('set_reader_lock', {
+      p_book_id: bookId,
+      p_passcode: passcode,
+    });
+    if (error) fail(error, 'Could not save the reader passcode');
   },
 
   async listVersions(bookId: string): Promise<VersionSummary[]> {

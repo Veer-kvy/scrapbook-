@@ -61,6 +61,13 @@ export interface PublishedSnapshot {
   label: string;
 }
 
+/** A shared link that needs (or received the wrong) reader passcode. */
+export interface PublishedLocked {
+  locked: true;
+}
+
+export type PublishedLookup = PublishedSnapshot | PublishedLocked;
+
 export interface BookPatch {
   title?: string;
   slug?: string;
@@ -103,8 +110,10 @@ export interface ContentBackend {
   saveDraft(bookId: string, doc: ScrapbookDoc, options?: SaveOptions): Promise<{ updatedAt: number }>;
 
   loadPublished(bookId: string): Promise<PublishedSnapshot | null>;
-  findPublishedBySlug(slug: string): Promise<PublishedSnapshot | null>;
+  findPublishedBySlug(slug: string, passcode?: string): Promise<PublishedLookup | null>;
   listPublishedBooks(): Promise<PublishedBookSummary[]>;
+  /** Admin only: set or clear (null) the reader passcode for a published link. */
+  setReaderLock?(bookId: string, passcode: string | null): Promise<void>;
   listVersions(bookId: string): Promise<VersionSummary[]>;
   publish(
     bookId: string,

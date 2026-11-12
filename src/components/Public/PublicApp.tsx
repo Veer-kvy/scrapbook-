@@ -7,6 +7,7 @@ import { CoverScene } from '../Scenes/CoverScene';
 import { BookViewer } from '../Scrapbook/BookViewer';
 import { Splash } from '../UI/Splash';
 import { MissingLink, ShelfError, ShelfScreen } from './ShelfScreen';
+import { LockedBook } from './LockedBook';
 
 export function PublicApp({ slug }: { slug: string | null }) {
   useAppEffects('public');
@@ -16,6 +17,7 @@ export function PublicApp({ slug }: { slug: string | null }) {
   const doc = useAppStore((state) => state.doc);
   const scene = useAppStore((state) => state.scene);
   const publicMissing = useAppStore((state) => state.publicMissing);
+  const publicLocked = useAppStore((state) => state.publicLocked);
   const profile = useAppStore((state) => state.profile);
   const reduce = useReducedMotion();
 
@@ -35,6 +37,7 @@ export function PublicApp({ slug }: { slug: string | null }) {
   if (bootError) return <ShelfError message={bootError} />;
   if (!slug) return <ShelfScreen />;
   if (publicMissing) return <MissingLink slug={slug} />;
+  if (publicLocked) return <LockedBook slug={slug} />;
   if (!doc) return <ShelfScreen />;
 
   return (

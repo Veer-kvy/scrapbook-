@@ -40,6 +40,8 @@
 -- The Storage bucket and its objects are left untouched; the old draft/ and
 -- published/ files become unreferenced and can be deleted from the dashboard.
 
+-- pgcrypto hashes reader passcodes. On Supabase it lives in the extensions
+-- schema, so the functions below search both public and extensions.
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------- admins
@@ -75,6 +77,7 @@ create table if not exists public.books (
   page_count integer not null default 0,
   photo_count integer not null default 0,
   draft_json jsonb,
+  reader_lock_hash text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   published_at timestamptz,
@@ -82,6 +85,9 @@ create table if not exists public.books (
   constraint books_slug_format
     check (slug ~ '^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$')
 );
+
+-- Databases created before reader passcodes existed still need the column.
+alter table public.books add column if not exists reader_lock_hash text;
 
 create table if not exists public.scrapbook_versions (
   id uuid primary key default gen_random_uuid(),
@@ -145,6 +151,42 @@ grant select, insert, update, delete on public.books to authenticated;
 grant select, insert, delete on public.scrapbook_versions to authenticated;
 grant select, insert, update, delete on public.scrapbook_publication to authenticated;
 grant select, insert, update, delete on public.scrapbook_profile to authenticated;
+
+-- ------------------------------------------------------- reader passcode
+-- Only the administrator can set or clear a book's reader passcode. A bcrypt
+-- hash is stored; the plain passcode never leaves the browser unhashed.
+create or replace function public.set_reader_lock(p_book_id uuid, p_passcode text)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_pass text := nullif(btrim(coalesce(p_passcode, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only the administrator can change the reader passcode';
+  end if;
+
+  if v_pass is not null and length(v_pass) < 4 then
+    raise exception 'Use at least four characters for the reader passcode';
+  end if;
+
+  update public.books
+     set reader_lock_hash = case
+           when v_pass is null then null
+           else crypt(v_pass, gen_salt('bf'))
+         end
+   where books.id = p_book_id;
+
+  if not found then
+    raise exception 'Scrapbook not found';
+  end if;
+end;
+$$;
+
+revoke all on function public.set_reader_lock(uuid, text) from public;
+grant execute on function public.set_reader_lock(uuid, text) to authenticated;
 
 -- ---------------------------------------------------------------- publishing
 -- Creates an immutable snapshot and points the scrapbook at it in one
@@ -212,32 +254,77 @@ $$;
 revoke all on function public.publish_version(uuid, jsonb, text, integer, integer, integer) from anon;
 grant execute on function public.publish_version(uuid, jsonb, text, integer, integer, integer) to authenticated;
 
--- ---------------------------------------------------------------- public reads
--- Readers resolve a shared link (#/s/<slug>) through this function. It only
--- ever returns the published snapshot for that slug, never a draft.
-create or replace function public.get_published_by_slug(p_slug text)
-returns jsonb
+-- ------------------------------------------------------------ kill switch
+-- One-row table that lets the owner close the public site instantly from the
+-- SQL editor, without a redeploy. The table itself has no RLS policies and no
+-- grants, so browsers can only observe the effect through public.site_enabled().
+create table if not exists public.site_switch (
+  id boolean primary key default true check (id),
+  enabled boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+
+insert into public.site_switch (id) values (true) on conflict (id) do nothing;
+
+alter table public.site_switch enable row level security;
+revoke all on table public.site_switch from anon, authenticated;
+
+create or replace function public.site_enabled()
+returns boolean
 language sql
 stable
 security definer
 set search_path = public
 as $$
-  select jsonb_build_object(
-    'versionId', v.id,
-    'versionNumber', v.version_number,
-    'label', v.label,
-    'publishedAt', (extract(epoch from p.published_at) * 1000)::bigint,
-    'doc', v.snapshot_json
-  )
+  select coalesce((select enabled from public.site_switch where id), true);
+$$;
+
+revoke all on function public.site_enabled() from public;
+grant execute on function public.site_enabled() to anon, authenticated;
+
+-- ---------------------------------------------------------------- public reads
+-- Readers resolve a shared link (#/s/<slug>) through this function. It only
+-- ever returns the published snapshot for that slug, never a draft. When the
+-- book has a reader passcode, the snapshot is withheld until the passcode
+-- matches; the caller gets {"locked": true} instead.
+drop function if exists public.get_published_by_slug(text);
+drop function if exists public.get_published_by_slug(text, text);
+
+create function public.get_published_by_slug(p_slug text, p_passcode text default null)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public, extensions
+as $$
+  select case
+    when b.reader_lock_hash is not null
+      and (
+        p_passcode is null
+        or crypt(p_passcode, b.reader_lock_hash) <> b.reader_lock_hash
+      )
+      then jsonb_build_object('locked', true)
+    else jsonb_build_object(
+      'versionId', v.id,
+      'versionNumber', v.version_number,
+      'label', v.label,
+      'publishedAt', (extract(epoch from p.published_at) * 1000)::bigint,
+      'doc', v.snapshot_json
+    )
+  end
   from public.books b
   join public.scrapbook_publication p on p.book_id = b.id
   join public.scrapbook_versions v on v.id = p.version_id
   where b.slug = lower(p_slug)
+    and public.site_enabled()
   limit 1;
 $$;
 
--- The shelf: every published scrapbook, newest first.
-create or replace function public.list_published_books()
+-- The shelf: every published scrapbook, newest first. Locked books are still
+-- listed so the owner's shelf stays complete; the link asks for the passcode.
+drop function if exists public.list_published_books();
+
+create function public.list_published_books()
 returns table (
   id uuid,
   slug text,
@@ -247,7 +334,8 @@ returns table (
   sender text,
   "publishedAt" bigint,
   "versionNumber" integer,
-  "pageCount" integer
+  "pageCount" integer,
+  locked boolean
 )
 language sql
 stable
@@ -263,10 +351,12 @@ as $$
     coalesce(v.snapshot_json -> 'meta' ->> 'sender', ''),
     (extract(epoch from p.published_at) * 1000)::bigint,
     v.version_number,
-    coalesce(jsonb_array_length(v.snapshot_json -> 'pages'), 0)
+    coalesce(jsonb_array_length(v.snapshot_json -> 'pages'), 0),
+    (b.reader_lock_hash is not null)
   from public.books b
   join public.scrapbook_publication p on p.book_id = b.id
   join public.scrapbook_versions v on v.id = p.version_id
+  where public.site_enabled()
   order by p.published_at desc;
 $$;
 
@@ -277,16 +367,19 @@ stable
 security definer
 set search_path = public
 as $$
-  select coalesce(
-    (select profile_json from public.scrapbook_profile where id = 1),
-    'null'::jsonb
-  );
+  select case
+    when public.site_enabled() then coalesce(
+      (select profile_json from public.scrapbook_profile where id = 1),
+      'null'::jsonb
+    )
+    else 'null'::jsonb
+  end;
 $$;
 
-revoke all on function public.get_published_by_slug(text) from public;
+revoke all on function public.get_published_by_slug(text, text) from public;
 revoke all on function public.list_published_books() from public;
 revoke all on function public.get_maker_profile() from public;
-grant execute on function public.get_published_by_slug(text) to anon, authenticated;
+grant execute on function public.get_published_by_slug(text, text) to anon, authenticated;
 grant execute on function public.list_published_books() to anon, authenticated;
 grant execute on function public.get_maker_profile() to anon, authenticated;
 
@@ -306,4 +399,8 @@ create policy "admins manage scrapbook media" on storage.objects
 drop policy if exists "readers open published media" on storage.objects;
 create policy "readers open published media" on storage.objects
   for select to anon, authenticated
-  using (bucket_id = 'scrapbook-media' and name like 'published/%');
+  using (
+    bucket_id = 'scrapbook-media'
+    and name like 'published/%'
+    and public.site_enabled()
+  );
